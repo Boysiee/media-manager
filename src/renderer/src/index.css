@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ─────────────────────────────────────────────────────────── */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* ── Title bar drag region ────────────────────────────────────────── */
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── Image rendering ──────────────────────────────────────────────── */
+
+.thumbnail-img {
+  image-rendering: auto;
+  transition: transform 200ms ease;
+}
+
+.file-card:hover .thumbnail-img {
+  transform: scale(1.05);
+}
+
+/* ── Selection highlight ──────────────────────────────────────────── */
+
+.selection-ring {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.7);
+}
+
+/* ── Folder tree connector lines ──────────────────────────────────── */
+
+.tree-line {
+  position: relative;
+}
+
+.tree-line::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Context menu ─────────────────────────────────────────────────── */
+
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+/* ── Inline rename input ──────────────────────────────────────────── */
+
+.rename-input {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  border-radius: 4px;
+  color: #e5e5e5;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  outline: none;
+  width: 100%;
+  text-align: center;
+}
+
+.rename-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+/* ── Transitions ──────────────────────────────────────────────────── */
+
+.panel-transition {
+  transition: width 200ms ease, opacity 200ms ease;
+}
+
+/* ── Drag feedback ────────────────────────────────────────────────── */
+
+.drop-target-active {
+  background: rgba(99, 102, 241, 0.08) !important;
+  outline: 2px dashed rgba(99, 102, 241, 0.4);
+  outline-offset: -2px;
+}
+
+/* ── Volume slider ────────────────────────────────────────────────── */
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e5e5e5;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+  background: #ffffff;
+  transform: scale(1.2);
+}
+
+/* ── Pre/code in preview ──────────────────────────────────────────── */
+
+pre::-webkit-scrollbar {
+  width: 4px;
+}
+
+pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
