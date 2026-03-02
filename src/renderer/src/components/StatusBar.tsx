@@ -1,4 +1,6 @@
 import { useFileStore } from '../stores/fileStore'
+import { getVisibleFilesFromState } from '../stores/fileStore'
+import { LARGE_FOLDER_WARNING_COUNT } from '../constants'
 
 function formatTotalSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -12,16 +14,16 @@ export default function StatusBar() {
   const selectedFiles = useFileStore((s) => s.selectedFiles)
   const searchQuery = useFileStore((s) => s.searchQuery)
   const searchIndex = useFileStore((s) => s.searchIndex)
+  const searchFilters = useFileStore((s) => s.searchFilters)
   const isSearching = useFileStore((s) => s.isSearching)
 
-  const displayFiles = searchQuery
-    ? searchIndex.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : files
+  const displayFiles = getVisibleFilesFromState({ files, searchQuery, searchIndex, searchFilters })
 
   const fileCount = displayFiles.filter((f) => !f.isDirectory).length
   const folderCount = displayFiles.filter((f) => f.isDirectory).length
   const totalSize = displayFiles.reduce((sum, f) => sum + (f.isDirectory ? 0 : f.size), 0)
   const selectedCount = selectedFiles.size
+  const isLargeFolder = displayFiles.length >= LARGE_FOLDER_WARNING_COUNT
 
   // Selected files total size
   const selectedSize = displayFiles
@@ -30,8 +32,8 @@ export default function StatusBar() {
 
   return (
     <div className="h-7 flex items-center justify-between px-4 bg-surface-50 border-t border-surface-500/20 shrink-0">
-      <div className="flex items-center gap-3">
-        <span className="text-[12px] text-neutral-400">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="text-[12px] text-neutral-400 shrink-0">
           {folderCount > 0 && (
             <span>
               {folderCount} folder{folderCount !== 1 ? 's' : ''}
@@ -51,6 +53,14 @@ export default function StatusBar() {
             <span className="text-[12px] text-accent-light">
               {selectedCount} selected
               {selectedSize > 0 && ` (${formatTotalSize(selectedSize)})`}
+            </span>
+          </>
+        )}
+        {isLargeFolder && (
+          <>
+            <span className="text-neutral-600">·</span>
+            <span className="text-[11px] text-amber-400/90 truncate" title="Sorting and filtering may be slower with this many items">
+              Large folder ({displayFiles.length.toLocaleString()} items)
             </span>
           </>
         )}

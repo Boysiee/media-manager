@@ -176,19 +176,21 @@ Define a **simple text scale** and stick to it:
   - Ensure at least `gap-3` or `gap-4` between cards.
 
 - **FileGrid (list mode)**
-  - Increase row height and add zebra or hover highlight to make scanning
-    across columns easier.
-  - Keep header row sticky (already done) but give it a slightly darker
-    background and clearer border.
+  - ✓ Increase row height and add zebra or hover highlight to make scanning
+    across columns easier. *(Done: zebra striping on odd rows; LIST_ROW_HEIGHT 40px.)*
+  - ✓ Keep header row sticky (already done) but give it a slightly darker
+    background and clearer border. *(Done: bg-surface-300/90, border-surface-500/40, h-9.)*
 
 - **PreviewPanel**
-  - Consistent padding: outer `p-4`, inner sections with `space-y-3`.
-  - Clear section dividers: subtle `border-t border-surface-500/25` between
-    preview media, metadata, path, and actions.
+  - ✓ Consistent padding: outer `p-4`, inner sections with `space-y-3`.
+    *(Done: content wrapper p-4 space-y-3; section dividers.)*
+  - ✓ Clear section dividers: subtle `border-t border-surface-500/25` between
+    preview media, metadata, path, and actions. *(Done.)*
 
 - **MoveDialog**
-  - Slightly increase vertical spacing between folder options; keep
+  - ✓ Slightly increase vertical spacing between folder options; keep
     scrollable area but respect comfortable click targets (~32–36px height).
+    *(Done: min-h-[36px] py-2 on FolderOption.)*
 
 ---
 
@@ -199,7 +201,7 @@ Define a **simple text scale** and stick to it:
 **Use tooltips for icons whose meaning is not immediately obvious:**
 
 - Toolbar:
-  - Back / Forward / Up (with shortcut in tooltip).
+  - ✓ Back / Forward / Up (with shortcut in tooltip). *(Done.)*
   - Sort dropdown: “Sort by…” and list items (Name, Date, Size, Type).
   - Sort order toggle: “Toggle sort order (Ascending/Descending)”.
   - Grid / List toggle: “Grid view” / “List view”.
@@ -292,5 +294,16 @@ Once these are in place, the app will feel **cleaner, more professional, and
 much easier to read and understand** without drowning the user in text or
 tooltips.
 
-*Items marked [x] or ✓ were implemented in a prior session.*
+---
+
+## 9. Completed in This Pass (Look & Feel)
+
+- **§5.2 FileGrid (list mode):** Zebra striping on odd rows; list header with darker background (`bg-surface-300/90`), clearer border (`border-surface-500/40`), fixed height `h-9`.
+- **§5.2 PreviewPanel:** Outer `p-4`, inner `space-y-3`; section dividers `border-t border-surface-500/25`; path block higher contrast (`text-[11px] text-neutral-400`, `bg-surface-300/50`).
+- **§5.2 MoveDialog:** Folder options `min-h-[36px] py-2` for comfortable click targets.
+- **§6.1 Tooltips:** Sort dropdown title "Sort by (Name, Date, Size, Type)"; sort order "Toggle sort order — Ascending/Descending"; preview "Toggle preview panel (Ctrl+P)"; ContextMenu Move/Recycle/Copy items have `title` tooltips.
+- **§6.2 Indexing:** TitleBar shows "Indexing your library so search stays fast" when `isSearching`.
+- **§6.2 Empty folder:** Empty state main message `text-[13px] text-neutral-300`.
+
+*Items marked [x] or ✓ in §§7–8 were implemented in prior sessions.*
 

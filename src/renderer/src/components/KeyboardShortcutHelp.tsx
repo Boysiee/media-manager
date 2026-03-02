@@ -14,7 +14,9 @@ const SHORTCUTS: { keys: string; description: string }[] = [
   { keys: 'Alt+Up', description: 'Up one folder' },
   { keys: 'F5', description: 'Refresh' },
   { keys: 'Escape', description: 'Close dialog / clear selection' },
-  { keys: '? or Ctrl+/', description: 'Show this help' }
+  { keys: '? or Ctrl+/', description: 'Show this help' },
+  { keys: 'Tools menu', description: 'Find duplicates…' },
+  { keys: 'Tools menu', description: 'Find misplaced files…' }
 ]
 
 interface KeyboardShortcutHelpProps {

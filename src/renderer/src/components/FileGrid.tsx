@@ -1,13 +1,22 @@
 import { useMemo, useCallback, useRef, useState, useEffect } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useFileStore } from '../stores/fileStore'
+import { getVisibleFilesFromState } from '../stores/fileStore'
 import FileCard from './FileCard'
 import FileListItem from './FileListItem'
 import type { FileItem } from '../types'
+import { LIST_COLUMN_LABELS, LIST_COLUMN_WIDTHS } from '../types'
+import { FAVORITES_PATH } from '../constants'
 
-const CARD_MIN_WIDTH = 150
-const CARD_HEIGHT = 230
-const GAP = 12
+const GRID_SIZES = {
+  small: { minWidth: 100, gap: 10, textAreaHeight: 76 },
+  medium: { minWidth: 150, gap: 14, textAreaHeight: 84 },
+  large: { minWidth: 200, gap: 16, textAreaHeight: 92 }
+} as const
+
+/** Extra row height when showing search results (path line under filename) so cards stay uniform */
+const SEARCH_EXTRA_ROW_HEIGHT = 20
+
 const LIST_ROW_HEIGHT = 40
 
 export default function FileGrid() {
@@ -28,7 +37,10 @@ export default function FileGrid() {
   const setSettingsOpen = useFileStore((s) => s.setSettingsOpen)
   const loadError = useFileStore((s) => s.loadError)
   const loadFiles = useFileStore((s) => s.loadFiles)
-  const currentPath = useFileStore((s) => s.currentPath)
+  const gridSize = useFileStore((s) => s.gridSize)
+  const searchFilters = useFileStore((s) => s.searchFilters)
+  const listColumns = useFileStore((s) => s.listColumns)
+  const favorites = useFileStore((s) => s.favorites)
 
   const parentRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(800)
@@ -45,24 +57,36 @@ export default function FileGrid() {
     return () => observer.disconnect()
   }, [])
 
-  // Filter by search
-  const displayFiles: FileItem[] = useMemo(() => {
-    if (!searchQuery.trim()) return files
-    const query = searchQuery.toLowerCase()
-    return searchIndex.filter((f) => f.name.toLowerCase().includes(query))
-  }, [files, searchQuery, searchIndex])
+  // Base file list: normal folder or Favorites (from search index)
+  const baseFiles = useMemo(() => {
+    if (currentPath === FAVORITES_PATH) {
+      return searchIndex.filter((f) => favorites.has(f.path))
+    }
+    return files
+  }, [currentPath, files, searchIndex, favorites])
 
-  // Grid calculations
-  const columnCount = Math.max(1, Math.floor((containerWidth + GAP) / (CARD_MIN_WIDTH + GAP)))
+  // Filter by search query + filters (category, modified, size)
+  const displayFiles: FileItem[] = useMemo(
+    () => getVisibleFilesFromState({ files: baseFiles, searchQuery, searchIndex: baseFiles, searchFilters }),
+    [baseFiles, searchQuery, searchFilters]
+  )
+
+  const gridConfig = GRID_SIZES[gridSize]
+  const columnCount = Math.max(1, Math.floor((containerWidth + gridConfig.gap) / (gridConfig.minWidth + gridConfig.gap)))
+  const columnWidth = (containerWidth - gridConfig.gap * (columnCount - 1)) / columnCount
+  /* Row height = square thumbnail (columnWidth) + padding + text + vertical gap so cards never overlap */
+  const baseRowHeight = Math.max(gridConfig.minWidth + gridConfig.textAreaHeight, columnWidth + gridConfig.textAreaHeight)
+  const gridRowHeight = searchQuery.trim()
+    ? baseRowHeight + SEARCH_EXTRA_ROW_HEIGHT
+    : baseRowHeight
   const rowCount = Math.ceil(displayFiles.length / columnCount)
 
-  // Virtualizer for grid
   const gridVirtualizer = useVirtualizer({
     count: viewMode === 'grid' ? rowCount : displayFiles.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (viewMode === 'grid' ? CARD_HEIGHT + GAP : LIST_ROW_HEIGHT),
+    estimateSize: () => (viewMode === 'grid' ? gridRowHeight : LIST_ROW_HEIGHT),
     overscan: 5,
-    gap: viewMode === 'grid' ? GAP : 0
+    gap: viewMode === 'grid' ? gridConfig.gap : 0
   })
 
   const handleClick = useCallback(
@@ -142,6 +166,11 @@ export default function FileGrid() {
   }
 
   if (loadError) {
+    const isPathError =
+      loadError.includes('Path not allowed') ||
+      loadError.includes('No folder path set') ||
+      loadError.includes('does not exist') ||
+      loadError.includes('Access denied')
     return (
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="flex flex-col items-center gap-4 max-w-sm text-center">
@@ -152,12 +181,22 @@ export default function FileGrid() {
           <p className="text-[12px] text-neutral-500">
             {loadError}
           </p>
-          <button
-            onClick={() => loadFiles(currentPath)}
-            className="px-4 py-2 bg-accent/20 text-accent-light text-[13px] font-medium rounded-lg hover:bg-accent/30 transition-colors"
-          >
-            Retry
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadFiles(currentPath)}
+              className="px-4 py-2 bg-accent/20 text-accent-light text-[13px] font-medium rounded-lg hover:bg-accent/30 transition-colors"
+            >
+              Retry
+            </button>
+            {isPathError && (
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="px-4 py-2 bg-surface-400/60 text-neutral-200 text-[13px] font-medium rounded-lg hover:bg-surface-500/60 transition-colors"
+              >
+                Open Settings
+              </button>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -183,19 +222,28 @@ export default function FileGrid() {
       >
         <div className="flex flex-col items-center gap-2 text-neutral-400">
           <span className="text-4xl opacity-40">
-            {searchQuery ? '🔍' : '📁'}
+            {currentPath === FAVORITES_PATH ? '⭐' : searchQuery ? '🔍' : '📁'}
           </span>
-          <span className="text-[14px] text-neutral-300">
-            {searchQuery ? 'No files match your search' : 'This folder is empty'}
+          <span className="text-[13px] text-neutral-300">
+            {currentPath === FAVORITES_PATH && !searchQuery
+              ? 'No favorites yet'
+              : searchQuery
+                ? 'No files match your search'
+                : 'This folder is empty'}
           </span>
           {searchQuery && (
             <span className="text-[12px] text-neutral-500">
               Try a different name or clear search
             </span>
           )}
-          {!searchQuery && (
+          {!searchQuery && currentPath !== FAVORITES_PATH && (
             <span className="text-[12px] text-neutral-500">
               Press Ctrl+Shift+N to create a folder
+            </span>
+          )}
+          {!searchQuery && currentPath === FAVORITES_PATH && (
+            <span className="text-[12px] text-neutral-500">
+              Star items in the grid to add them here
             </span>
           )}
         </div>
@@ -243,7 +291,10 @@ export default function FileGrid() {
                   height: virtualRow.size,
                   display: 'grid',
                   gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
-                  gap: GAP
+                  gridTemplateRows: '1fr',
+                  gap: gridConfig.gap,
+                  alignItems: 'stretch',
+                  minHeight: 0
                 }}
               >
                 {rowFiles.map((file) => (
@@ -253,6 +304,7 @@ export default function FileGrid() {
                     isSelected={selectedFiles.has(file.path)}
                     isSearchResult={!!searchQuery}
                     currentPath={currentPath}
+                    gridSize={gridSize}
                     onClick={handleClick}
                     onDoubleClick={handleDoubleClick}
                     onContextMenu={handleContextMenu}
@@ -270,13 +322,14 @@ export default function FileGrid() {
             position: 'relative'
           }}
         >
-          {/* List header */}
-          <div className="grid grid-cols-[1fr_100px_100px_140px_80px] gap-4 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 border-b border-surface-500/20 sticky top-0 bg-surface-200/80 backdrop-blur-sm z-10">
-            <span>Name</span>
-            <span>Size</span>
-            <span>Type</span>
-            <span>Modified</span>
-            <span>Duration</span>
+          {/* List header — columns from listColumns */}
+          <div
+            className="grid gap-4 px-3 h-9 items-center text-[11px] font-semibold uppercase tracking-wider text-neutral-500 border-b border-surface-500/40 sticky top-0 bg-surface-300/90 backdrop-blur-sm z-10"
+            style={{ gridTemplateColumns: listColumns.map((id) => LIST_COLUMN_WIDTHS[id]).join(' ') }}
+          >
+            {listColumns.map((id) => (
+              <span key={id}>{LIST_COLUMN_LABELS[id]}</span>
+            ))}
           </div>
 
           {gridVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -288,14 +341,16 @@ export default function FileGrid() {
                 key={virtualRow.key}
                 style={{
                   position: 'absolute',
-                  top: virtualRow.start + 30,
+                  top: virtualRow.start + 36,
                   left: 0,
                   width: '100%',
                   height: virtualRow.size
                 }}
+                className={virtualRow.index % 2 === 1 ? 'bg-surface-300/20' : ''}
               >
                 <FileListItem
                   file={file}
+                  listColumns={listColumns}
                   isSelected={selectedFiles.has(file.path)}
                   isSearchResult={!!searchQuery}
                   currentPath={currentPath}

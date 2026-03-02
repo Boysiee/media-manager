@@ -25,7 +25,6 @@ export default function FolderTree({
   const moveSelectedFiles = useFileStore((s) => s.moveSelectedFiles)
 
   const isActive = currentPath === node.path
-  const hasChildren = node.children === null || node.children.length > 0
 
   const handleToggle = useCallback(async () => {
     if (!isExpanded && node.children === null) {
@@ -78,8 +77,8 @@ export default function FolderTree({
   return (
     <div>
       <div
-        className={`flex items-center gap-1 px-1.5 py-1 rounded-md cursor-pointer transition-all duration-100 group
-          ${isActive ? 'bg-accent/15 text-neutral-100' : 'text-neutral-400 hover:bg-surface-300/40 hover:text-neutral-200'}
+        className={`flex items-center gap-1 px-1.5 py-1 rounded-md cursor-pointer transition-all duration-100 group border-l-2
+          ${isActive ? 'border-l-accent' : 'border-l-transparent text-neutral-400 hover:bg-surface-300/40 hover:text-neutral-200'}
           ${isDropTarget ? 'drop-target-active' : ''}`}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
         onClick={handleClick}
@@ -92,8 +91,9 @@ export default function FolderTree({
             e.stopPropagation()
             handleToggle()
           }}
-          className={`w-4 h-4 flex items-center justify-center shrink-0 transition-transform duration-150
-            ${hasChildren ? 'opacity-100' : 'opacity-0'}`}
+          className="w-4 h-4 flex items-center justify-center shrink-0 transition-transform duration-150 opacity-100"
+          title={isExpanded ? 'Collapse' : 'Expand'}
+          aria-label={isExpanded ? 'Collapse folder' : 'Expand folder'}
         >
           <ChevronRight
             size={11}
@@ -102,7 +102,7 @@ export default function FolderTree({
         </button>
 
         {isExpanded ? (
-          <FolderOpen size={13} className="shrink-0 text-accent-light" />
+          <FolderOpen size={13} className="shrink-0" />
         ) : (
           <Folder size={13} className="shrink-0" />
         )}
@@ -118,23 +118,16 @@ export default function FolderTree({
               Loading...
             </div>
           ) : node.children ? (
-            <>
-              {node.children.map((child) => (
-                <FolderTree
-                  key={child.path}
-                  node={child}
-                  depth={depth + 1}
-                  currentPath={currentPath}
-                  onNavigate={onNavigate}
-                  onExpand={onExpand}
-                />
-              ))}
-              {node.children.length === 0 && (
-                <div className="text-[11px] text-neutral-500 px-6 py-1 italic">
-                  Empty
-                </div>
-              )}
-            </>
+            node.children.map((child) => (
+              <FolderTree
+                key={child.path}
+                node={child}
+                depth={depth + 1}
+                currentPath={currentPath}
+                onNavigate={onNavigate}
+                onExpand={onExpand}
+              />
+            ))
           ) : null}
         </div>
       )}

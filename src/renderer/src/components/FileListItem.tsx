@@ -2,10 +2,12 @@ import { memo, useRef, useCallback, useState, useEffect } from 'react'
 import { format } from 'date-fns'
 import { useFileStore } from '../stores/fileStore'
 import { getFileIcon, formatFileSize, formatDuration } from '../utils/icons'
-import type { FileItem } from '../types'
+import type { FileItem, ListColumnId } from '../types'
+import { LIST_COLUMN_WIDTHS } from '../types'
 
 interface FileListItemProps {
   file: FileItem
+  listColumns: ListColumnId[]
   isSelected: boolean
   isSearchResult: boolean
   currentPath: string
@@ -34,6 +36,7 @@ const READABLE_TYPES: Record<string, string> = {
 
 const FileListItem = memo(function FileListItem({
   file,
+  listColumns,
   isSelected,
   isSearchResult,
   currentPath,
@@ -84,11 +87,67 @@ const FileListItem = memo(function FileListItem({
 
   const durationSeconds = (file.category === 'video' || file.category === 'audio') ? mediaDurations[file.path] : undefined
 
+  const renderCell = (id: ListColumnId) => {
+    switch (id) {
+      case 'name':
+        return (
+          <div className="flex items-center gap-2 min-w-0">
+            <Icon size={14} style={{ color }} className="shrink-0" />
+            {isRenaming ? (
+              <input
+                ref={inputRef}
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={handleRenameSubmit}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRenameSubmit()
+                  if (e.key === 'Escape') setRenamingPath(null)
+                }}
+                className="rename-input text-left"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <div className="min-w-0">
+                <span className="text-[13px] text-neutral-100 truncate block">{file.name}</span>
+                {relativePath && (
+                  <span className="text-[11px] text-neutral-500 truncate block">{relativePath}</span>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      case 'size':
+        return (
+          <span className="text-[12px] text-neutral-400">
+            {file.isDirectory ? '—' : formatFileSize(file.size)}
+          </span>
+        )
+      case 'type':
+        return <span className="text-[12px] text-neutral-400">{typeLabel}</span>
+      case 'modified':
+        return (
+          <span className="text-[12px] text-neutral-400">
+            {format(new Date(file.modified), 'dd MMM yyyy, HH:mm')}
+          </span>
+        )
+      case 'duration':
+        return (
+          <span className="text-[12px] text-neutral-400 tabular-nums">
+            {durationSeconds != null ? formatDuration(durationSeconds) : '—'}
+          </span>
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <div
-      className={`grid grid-cols-[1fr_100px_100px_140px_80px] gap-4 items-center px-3 py-1.5 rounded-md cursor-pointer
+      className={`grid gap-4 items-center px-3 py-1.5 rounded-md cursor-pointer
                   transition-colors duration-75 select-none
                   ${isSelected ? 'bg-accent/10 selection-ring' : 'hover:bg-surface-300/30'}`}
+      style={{ gridTemplateColumns: listColumns.map((id) => LIST_COLUMN_WIDTHS[id]).join(' ') }}
       onClick={(e) => {
         e.stopPropagation()
         onClick(file, e)
@@ -99,41 +158,9 @@ const FileListItem = memo(function FileListItem({
       }}
       onContextMenu={(e) => onContextMenu(e, file)}
     >
-      <div className="flex items-center gap-2 min-w-0">
-        <Icon size={14} style={{ color }} className="shrink-0" />
-        {isRenaming ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onBlur={handleRenameSubmit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleRenameSubmit()
-              if (e.key === 'Escape') setRenamingPath(null)
-            }}
-            className="rename-input text-left"
-            onClick={(e) => e.stopPropagation()}
-          />
-        ) : (
-          <div className="min-w-0">
-            <span className="text-[13px] text-neutral-100 truncate block">{file.name}</span>
-            {relativePath && (
-              <span className="text-[11px] text-neutral-500 truncate block">{relativePath}</span>
-            )}
-          </div>
-        )}
-      </div>
-      <span className="text-[12px] text-neutral-400">
-        {file.isDirectory ? '—' : formatFileSize(file.size)}
-      </span>
-      <span className="text-[12px] text-neutral-400">{typeLabel}</span>
-      <span className="text-[12px] text-neutral-400">
-        {format(new Date(file.modified), 'dd MMM yyyy, HH:mm')}
-      </span>
-      <span className="text-[12px] text-neutral-400 tabular-nums">
-        {durationSeconds != null ? formatDuration(durationSeconds) : '—'}
-      </span>
+      {listColumns.map((id) => (
+        <div key={id}>{renderCell(id)}</div>
+      ))}
     </div>
   )
 })

@@ -11,16 +11,25 @@ import {
   RefreshCw,
   PanelRightClose,
   PanelRightOpen,
-  Check
+  Check,
+  Sun,
+  Moon,
+  Wrench
 } from 'lucide-react'
 import { useFileStore } from '../stores/fileStore'
-import type { SortField } from '../types'
+import type { SortField, ListColumnId } from '../types'
+import { LIST_COLUMN_LABELS } from '../types'
+import { FAVORITES_PATH } from '../constants'
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'name', label: 'Name' },
-  { value: 'date', label: 'Date' },
+  { value: 'date', label: 'Date modified' },
+  { value: 'created', label: 'Date created' },
   { value: 'size', label: 'Size' },
-  { value: 'type', label: 'Type' }
+  { value: 'type', label: 'Type' },
+  { value: 'path', label: 'Path' },
+  { value: 'duration', label: 'Duration' },
+  { value: 'random', label: 'Random' }
 ]
 
 export default function Toolbar() {
@@ -43,8 +52,33 @@ export default function Toolbar() {
   const togglePreview = useFileStore((s) => s.togglePreview)
   const createFolder = useFileStore((s) => s.createFolder)
   const refresh = useFileStore((s) => s.refresh)
+  const gridSize = useFileStore((s) => s.gridSize)
+  const setGridSize = useFileStore((s) => s.setGridSize)
+  const listColumns = useFileStore((s) => s.listColumns)
+  const setListColumns = useFileStore((s) => s.setListColumns)
+  const theme = useFileStore((s) => s.theme)
+  const setTheme = useFileStore((s) => s.setTheme)
+  const setDuplicatesDialogOpen = useFileStore((s) => s.setDuplicatesDialogOpen)
+  const setMisplacedDialogOpen = useFileStore((s) => s.setMisplacedDialogOpen)
 
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false)
+  const [gridSizeOpen, setGridSizeOpen] = useState(false)
+  const [columnsDropdownOpen, setColumnsDropdownOpen] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const gridSizeRef = useRef<HTMLDivElement>(null)
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const toolsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!gridSizeOpen) return
+    const handler = (e: MouseEvent) => {
+      if (gridSizeRef.current && !gridSizeRef.current.contains(e.target as Node)) {
+        setGridSizeOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [gridSizeOpen])
   const sortRef = useRef<HTMLDivElement>(null)
 
   // Close dropdown on outside click
@@ -59,9 +93,45 @@ export default function Toolbar() {
     return () => document.removeEventListener('mousedown', handler)
   }, [sortDropdownOpen])
 
+  useEffect(() => {
+    if (!columnsDropdownOpen) return
+    const handler = (e: MouseEvent) => {
+      if (columnsRef.current && !columnsRef.current.contains(e.target as Node)) {
+        setColumnsDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [columnsDropdownOpen])
+
+  useEffect(() => {
+    if (!toolsOpen) return
+    const handler = (e: MouseEvent) => {
+      if (toolsRef.current && !toolsRef.current.contains(e.target as Node)) {
+        setToolsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [toolsOpen])
+
+  const ALL_LIST_COLUMNS: ListColumnId[] = ['name', 'size', 'type', 'modified', 'duration']
+  const toggleListColumn = (id: ListColumnId) => {
+    if (listColumns.includes(id)) {
+      if (listColumns.length <= 1) return
+      setListColumns(listColumns.filter((c) => c !== id))
+    } else {
+      const order = ALL_LIST_COLUMNS.filter((c) => listColumns.includes(c) || c === id)
+      setListColumns(order)
+    }
+  }
+
   // Breadcrumbs
   const breadcrumbs: { label: string; path: string }[] = []
-  if (currentPath && sectionRoot) {
+  if (currentPath === FAVORITES_PATH && sectionRoot) {
+    breadcrumbs.push({ label: 'Root', path: sectionRoot })
+    breadcrumbs.push({ label: 'Favorites', path: FAVORITES_PATH })
+  } else if (currentPath && sectionRoot) {
     const relative = currentPath.slice(sectionRoot.length)
     const parts = relative.split(/[\\/]/).filter(Boolean)
     let accumulated = sectionRoot
@@ -74,12 +144,12 @@ export default function Toolbar() {
 
   const canGoBack = historyIndex > 0
   const canGoForward = historyIndex < pathHistory.length - 1
-  const canGoUp = currentPath !== sectionRoot
+  const canGoUp = currentPath !== sectionRoot && (currentPath === FAVORITES_PATH || currentPath.length > sectionRoot.length)
 
   const currentSortLabel = SORT_OPTIONS.find((o) => o.value === sortField)?.label ?? 'Sort'
 
   return (
-    <div className="h-10 flex items-center gap-1 px-3 bg-surface-200/50 border-b border-surface-500/20 shrink-0">
+    <div className="toolbar h-10 flex items-center gap-1 px-3 bg-surface-200/50 border-b border-surface-500/20 shrink-0">
       {/* Navigation buttons */}
       <div className="flex items-center gap-0.5 mr-2">
         <button
@@ -139,10 +209,12 @@ export default function Toolbar() {
       {/* Right side tools */}
       <div className="flex items-center gap-1 ml-2">
         <button
-          onClick={() => createFolder('New Folder')}
+          onClick={() => currentPath !== FAVORITES_PATH && createFolder('New Folder')}
+          disabled={currentPath === FAVORITES_PATH}
           className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-500
-                     hover:bg-surface-400/40 hover:text-neutral-200 transition-colors"
-          title="New Folder (Ctrl+Shift+N)"
+                     hover:bg-surface-400/40 hover:text-neutral-200 transition-colors
+                     disabled:opacity-40 disabled:pointer-events-none"
+          title={currentPath === FAVORITES_PATH ? 'Not available in Favorites' : 'New Folder (Ctrl+Shift+N)'}
           aria-label="New folder"
         >
           <FolderPlus size={14} />
@@ -158,14 +230,52 @@ export default function Toolbar() {
           <RefreshCw size={13} />
         </button>
 
+        {/* Tools menu */}
+        <div ref={toolsRef} className="relative">
+          <button
+            onClick={() => setToolsOpen(!toolsOpen)}
+            className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-500
+                       hover:bg-surface-400/40 hover:text-neutral-200 transition-colors"
+            title="Tools"
+            aria-label="Tools"
+            aria-expanded={toolsOpen}
+            aria-haspopup="true"
+          >
+            <Wrench size={14} />
+          </button>
+          {toolsOpen && (
+            <div className="absolute top-full right-0 mt-1 w-48 bg-surface-300 border border-surface-500/40 rounded-lg shadow-xl shadow-black/40 py-1 z-50 animate-scale-in">
+              <button
+                onClick={() => {
+                  setDuplicatesDialogOpen(true)
+                  setToolsOpen(false)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-neutral-300 hover:bg-surface-500/40 hover:text-neutral-100 transition-colors"
+              >
+                Find duplicates…
+              </button>
+              <button
+                onClick={() => {
+                  setMisplacedDialogOpen(true)
+                  setToolsOpen(false)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-neutral-300 hover:bg-surface-500/40 hover:text-neutral-100 transition-colors"
+              >
+                Find misplaced files…
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="w-px h-5 bg-surface-500/30 mx-1" />
 
         {/* Custom sort dropdown */}
         <div ref={sortRef} className="relative">
           <button
             onClick={() => setSortDropdownOpen(!sortDropdownOpen)}
-            className="h-7 px-2.5 flex items-center gap-1.5 bg-surface-300 border border-surface-500/30 rounded-l-md
-                       text-[12px] text-neutral-400 hover:bg-surface-400/60 hover:text-neutral-300 transition-colors"
+            className={`h-7 px-2.5 flex items-center gap-1.5 bg-surface-300 border border-surface-500/30
+                       text-[12px] text-neutral-400 hover:bg-surface-400/60 hover:text-neutral-300 transition-colors
+                       ${sortField === 'random' ? 'rounded-md' : 'rounded-l-md'}`}
             title="Sort by"
             aria-label="Sort by"
           >
@@ -174,7 +284,7 @@ export default function Toolbar() {
           </button>
 
           {sortDropdownOpen && (
-            <div className="absolute top-full left-0 mt-1 w-32 bg-surface-300 border border-surface-500/40 rounded-lg shadow-xl shadow-black/40 py-1 z-50 animate-scale-in">
+            <div className="absolute top-full left-0 mt-1 w-36 bg-surface-300 border border-surface-500/40 rounded-lg shadow-xl shadow-black/40 py-1 z-50 animate-scale-in">
               {SORT_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -193,15 +303,96 @@ export default function Toolbar() {
           )}
         </div>
 
+        {sortField !== 'random' && (
+          <button
+            onClick={toggleSortOrder}
+            className="h-7 w-7 flex items-center justify-center bg-surface-300 border border-l-0
+                       border-surface-500/30 rounded-r-md text-neutral-500
+                       hover:bg-surface-400/60 hover:text-neutral-300 transition-colors"
+            title={sortOrder === 'asc' ? 'Toggle sort order — Ascending (A→Z, oldest first)' : 'Toggle sort order — Descending (Z→A, newest first)'}
+            aria-label={sortOrder === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          >
+            <ArrowUpDown size={12} className={sortOrder === 'desc' ? 'rotate-180' : ''} />
+          </button>
+        )}
+
+        <div className="w-px h-5 bg-surface-500/30 mx-1" />
+
+        {/* Grid size (when in grid view) */}
+        {viewMode === 'grid' && (
+          <div ref={gridSizeRef} className="relative">
+            <button
+              onClick={() => setGridSizeOpen(!gridSizeOpen)}
+              className="h-7 px-2.5 flex items-center gap-1 bg-surface-300 border border-surface-500/30 rounded-md
+                         text-[11px] text-neutral-400 hover:bg-surface-400/60 hover:text-neutral-300 transition-colors"
+              title="Thumbnail size"
+              aria-label="Grid size"
+            >
+              {gridSize === 'small' ? 'S' : gridSize === 'large' ? 'L' : 'M'}
+            </button>
+            {gridSizeOpen && (
+              <div className="absolute top-full right-0 mt-1 w-24 bg-surface-300 border border-surface-500/40 rounded-lg shadow-xl shadow-black/40 py-1 z-50 animate-scale-in">
+                {(['small', 'medium', 'large'] as const).map((size) => (
+                  <button
+                    key={size}
+                    onClick={() => {
+                      setGridSize(size)
+                      setGridSizeOpen(false)
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-[11px]
+                               text-neutral-300 hover:bg-surface-500/40 transition-colors"
+                  >
+                    <span>{size === 'small' ? 'Small' : size === 'large' ? 'Large' : 'Medium'}</span>
+                    {gridSize === size && <Check size={11} className="text-accent-light" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* List columns (when in list view) */}
+        {viewMode === 'list' && (
+          <div ref={columnsRef} className="relative">
+            <button
+              onClick={() => setColumnsDropdownOpen(!columnsDropdownOpen)}
+              className="h-7 px-2.5 flex items-center gap-1 bg-surface-300 border border-surface-500/30 rounded-md
+                         text-[11px] text-neutral-400 hover:bg-surface-400/60 hover:text-neutral-300 transition-colors"
+              title="Choose columns"
+              aria-label="List columns"
+            >
+              Columns
+              <ChevronDown size={10} className={columnsDropdownOpen ? 'rotate-180' : ''} />
+            </button>
+            {columnsDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 w-36 bg-surface-300 border border-surface-500/40 rounded-lg shadow-xl shadow-black/40 py-1 z-50 animate-scale-in">
+                {ALL_LIST_COLUMNS.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => toggleListColumn(id)}
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-[11px]
+                               text-neutral-300 hover:bg-surface-500/40 transition-colors"
+                  >
+                    <span>{LIST_COLUMN_LABELS[id]}</span>
+                    {listColumns.includes(id) && <Check size={11} className="text-accent-light" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="w-px h-5 bg-surface-500/30 mx-1" />
+
+        {/* Theme toggle */}
         <button
-          onClick={toggleSortOrder}
-          className="h-7 w-7 flex items-center justify-center bg-surface-300 border border-l-0
-                     border-surface-500/30 rounded-r-md text-neutral-500
-                     hover:bg-surface-400/60 hover:text-neutral-300 transition-colors"
-          title={sortOrder === 'asc' ? 'Ascending (A→Z, oldest first)' : 'Descending (Z→A, newest first)'}
-          aria-label={sortOrder === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-500
+                     hover:bg-surface-400/40 hover:text-neutral-200 transition-colors"
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'}
         >
-          <ArrowUpDown size={12} className={sortOrder === 'desc' ? 'rotate-180' : ''} />
+          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
         </button>
 
         <div className="w-px h-5 bg-surface-500/30 mx-1" />
@@ -232,7 +423,7 @@ export default function Toolbar() {
           onClick={togglePreview}
           className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors
             ${isPreviewOpen ? 'text-accent-light bg-accent/10' : 'text-neutral-500 hover:bg-surface-400/40 hover:text-neutral-200'}`}
-          title="Toggle Preview (Ctrl+P)"
+          title="Toggle preview panel (Ctrl+P)"
           aria-label="Toggle preview panel"
         >
           {isPreviewOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}

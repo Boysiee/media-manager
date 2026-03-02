@@ -11,11 +11,15 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
   const sectionRoot = useFileStore((s) => s.sectionRoot)
   const currentPath = useFileStore((s) => s.currentPath)
   const selectedFiles = useFileStore((s) => s.selectedFiles)
+  const moveDialogOverrideSources = useFileStore((s) => s.moveDialogOverrideSources)
   const setMoveDialogOpen = useFileStore((s) => s.setMoveDialogOpen)
   const moveSelectedFiles = useFileStore((s) => s.moveSelectedFiles)
   const copySelectedFiles = useFileStore((s) => s.copySelectedFiles)
+  const moveFilesToDestination = useFileStore((s) => s.moveFilesToDestination)
   const activeSection = useFileStore((s) => s.activeSection)
   const addNotification = useFileStore((s) => s.addNotification)
+
+  const sources = moveDialogOverrideSources ?? Array.from(selectedFiles)
 
   const [tree, setTree] = useState<FolderNode[]>([])
   const [selectedFolder, setSelectedFolder] = useState<string | null>(sectionRoot)
@@ -39,25 +43,49 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
     load()
   }, [sectionRoot])
 
-  const selectedPaths = Array.from(selectedFiles)
   const norm = (s: string) => s.replace(/\\/g, '/')
   const parentOf = (p: string) => p.replace(/[\\/][^\\/]+$/, '')
   const isSameFolder =
     selectedFolder === currentPath &&
-    selectedPaths.length > 0 &&
-    selectedPaths.every((p) => norm(parentOf(p)) === norm(currentPath))
+    sources.length > 0 &&
+    sources.every((p) => norm(parentOf(p)) === norm(currentPath))
 
   const handleConfirm = useCallback(async () => {
     if (!selectedFolder) return
     setIsMoving(true)
     if (mode === 'move') {
-      await moveSelectedFiles(selectedFolder)
+      if (moveDialogOverrideSources) {
+        await moveFilesToDestination(moveDialogOverrideSources, selectedFolder)
+      } else {
+        await moveSelectedFiles(selectedFolder)
+      }
     } else {
-      await copySelectedFiles(selectedFolder)
+      if (moveDialogOverrideSources) {
+        const results = await window.api.copyFiles(moveDialogOverrideSources, selectedFolder)
+        const failures = results.filter((r: { success: boolean }) => !r.success)
+        if (failures.length > 0) {
+          addNotification('error', `Failed to copy ${failures.length} file(s)`)
+        } else {
+          addNotification('success', `Copied ${moveDialogOverrideSources.length} file(s) successfully`)
+        }
+        setMoveDialogOpen(false)
+        await Promise.all([
+          useFileStore.getState().loadFiles(currentPath),
+          useFileStore.getState().loadFolderTree(sectionRoot)
+        ])
+      } else {
+        await copySelectedFiles(selectedFolder)
+      }
     }
     setIsMoving(false)
     setMoveDialogOpen(false)
-  }, [selectedFolder, mode, moveSelectedFiles, copySelectedFiles, setMoveDialogOpen])
+  }, [selectedFolder, mode, moveDialogOverrideSources, moveSelectedFiles, copySelectedFiles, moveFilesToDestination, setMoveDialogOpen, addNotification, currentPath, sectionRoot])
+
+  const normPath = (p: string) => p.replace(/\//g, '\\')
+  const pathJoin = (parent: string, name: string) => {
+    const sep = parent.includes('/') ? '/' : '\\'
+    return (parent.endsWith(sep) ? parent : parent + sep) + name
+  }
 
   const handleCreateFolder = useCallback(async () => {
     const name = newFolderName.trim()
@@ -65,10 +93,11 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
     const parent = selectedFolder ?? sectionRoot
     try {
       await window.api.createFolder(parent, name)
+      const newPath = pathJoin(normPath(parent), name)
       addNotification('success', `Created "${name}"`)
-      // Refresh tree so the new folder appears: refresh from sectionRoot and, if parent is not root, refresh that parent's children in the tree
       const children = await window.api.getFolderChildren(sectionRoot)
       setTree(children)
+      setSelectedFolder(newPath)
       setNewFolderName('')
       setShowNewFolder(false)
     } catch (err) {
@@ -97,7 +126,7 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
         <div className="flex items-center justify-between px-4 py-3 border-b border-surface-500/20">
           <div>
             <h2 className="text-[14px] font-semibold text-neutral-200">
-              {mode === 'move' ? 'Move' : 'Copy'} {selectedFiles.size} file{selectedFiles.size !== 1 ? 's' : ''}
+              {mode === 'move' ? 'Move' : 'Copy'} {sources.length} file{sources.length !== 1 ? 's' : ''}
             </h2>
             <p className="text-[11px] text-neutral-600 mt-0.5">
               Choose a destination folder in {activeSection}
@@ -278,7 +307,7 @@ function FolderOption({
 }: FolderOptionProps) {
   return (
     <div
-      className={`flex items-center gap-1.5 py-1.5 px-2 rounded-md cursor-pointer transition-colors
+      className={`flex items-center gap-1.5 min-h-[36px] py-2 px-2 rounded-md cursor-pointer transition-colors
         ${isSelected ? 'bg-accent/15 text-neutral-200' : 'text-neutral-400 hover:bg-surface-300/50'}`}
       style={{ paddingLeft: `${depth * 16 + 8}px` }}
       onClick={() => onSelect(path)}

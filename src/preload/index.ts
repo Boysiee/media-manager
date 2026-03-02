@@ -14,11 +14,16 @@ const api = {
   setSectionPath: (sectionId: string, path: string): Promise<boolean> =>
     ipcRenderer.invoke('set-section-path', sectionId, path),
 
+  getFavorites: (): Promise<string[]> => ipcRenderer.invoke('get-favorites'),
+  setFavorites: (paths: string[]): Promise<void> => ipcRenderer.invoke('set-favorites', paths),
+
   getFiles: (dirPath: string) => ipcRenderer.invoke('get-files', dirPath),
   getFolderChildren: (dirPath: string) =>
     ipcRenderer.invoke('get-folder-children', dirPath),
   buildSearchIndex: (rootPath: string) =>
     ipcRenderer.invoke('build-search-index', rootPath),
+  findDuplicates: (rootPath: string) =>
+    ipcRenderer.invoke('find-duplicates', rootPath),
   moveFiles: (sources: string[], destination: string) =>
     ipcRenderer.invoke('move-files', sources, destination),
   copyFiles: (sources: string[], destination: string) =>
@@ -48,6 +53,9 @@ const api = {
   } | null> => ipcRenderer.invoke('get-audio-metadata', filePath),
   readTextFile: (filePath: string, maxLines?: number): Promise<string | null> =>
     ipcRenderer.invoke('read-text-file', filePath, maxLines),
+
+  // Media server
+  getMediaPort: (): Promise<number> => ipcRenderer.invoke('get-media-port'),
 
   // Window controls
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),

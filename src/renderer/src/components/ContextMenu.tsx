@@ -94,12 +94,14 @@ export default function ContextMenu() {
             icon={<Move size={13} />}
             label={`Move ${selectedFiles.size > 1 ? `${selectedFiles.size} items` : ''} to...`}
             shortcut="M"
+            title="Move selected items to another folder"
             onClick={() => action(() => setMoveDialogOpen(true, 'move'))}
           />
 
           <MenuItem
             icon={<Copy size={13} />}
             label={`Copy ${selectedFiles.size > 1 ? `${selectedFiles.size} items` : ''} to...`}
+            title="Copy selected items to another folder"
             onClick={() => action(() => setMoveDialogOpen(true, 'copy'))}
           />
 
@@ -122,6 +124,7 @@ export default function ContextMenu() {
             icon={<Trash2 size={13} />}
             label={`Recycle ${selectedFiles.size > 1 ? `${selectedFiles.size} items` : ''}`}
             shortcut="Del"
+            title="Move selected items to Recycle Bin"
             danger
             onClick={() => action(trashSelected)}
           />
@@ -156,14 +159,16 @@ interface MenuItemProps {
   icon: React.ReactNode
   label: string
   shortcut?: string
+  title?: string
   danger?: boolean
   onClick: () => void
 }
 
-function MenuItem({ icon, label, shortcut, danger, onClick }: MenuItemProps) {
+function MenuItem({ icon, label, shortcut, title, danger, onClick }: MenuItemProps) {
   return (
     <button
       onClick={onClick}
+      title={title}
       className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors
         ${danger
           ? 'text-red-400/80 hover:bg-red-500/10 hover:text-red-400'

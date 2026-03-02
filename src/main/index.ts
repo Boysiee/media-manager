@@ -4,19 +4,35 @@ import {
   ipcMain,
   shell,
   protocol,
-  net,
   nativeImage,
   dialog
 } from 'electron'
+import { createHash } from 'crypto'
 import { join, basename, extname, dirname, resolve, normalize, sep } from 'path'
+import { platform } from 'os'
 import { readdir, stat, rename, mkdir, access, readFile, copyFile, writeFile } from 'fs/promises'
-import { createReadStream } from 'fs'
+import { createReadStream, statSync } from 'fs'
 import { createInterface } from 'readline'
-import { pathToFileURL } from 'url'
+import { createServer, type Server } from 'http'
 
 // ---------------------------------------------------------------------------
 // Constants & config
 // ---------------------------------------------------------------------------
+
+const MEDIA_MIME_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo', '.mov': 'video/quicktime', '.wmv': 'video/x-ms-wmv',
+  '.flv': 'video/x-flv', '.m4v': 'video/mp4', '.ts': 'video/mp2t',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac', '.aac': 'audio/aac', '.m4a': 'audio/mp4',
+  '.wma': 'audio/x-ms-wma', '.opus': 'audio/opus',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.avif': 'image/avif', '.ico': 'image/x-icon'
+}
+
+let mediaServer: Server | null = null
+let mediaServerPort = 0
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   images: 'E:\\Media\\Images',
@@ -26,8 +42,15 @@ const DEFAULT_SECTIONS: Record<string, string> = {
 }
 
 const CONFIG_FILENAME = 'media-manager-config.json'
+const FAVORITES_FILENAME = 'media-manager-favorites.json'
 
 let MEDIA_SECTIONS: Record<string, string> = { ...DEFAULT_SECTIONS }
+
+interface SearchFiltersState {
+  category?: string
+  modified?: string
+  sizeMin?: string
+}
 
 interface UiState {
   viewMode?: 'grid' | 'list'
@@ -37,6 +60,13 @@ interface UiState {
   previewPanelWidth?: number
   lastSection?: string
   lastPath?: string
+  sidebarCollapsed?: boolean
+  sidebarWidth?: number
+  gridSize?: 'small' | 'medium' | 'large'
+  theme?: 'light' | 'dark'
+  recentPaths?: string[]
+  searchFilters?: SearchFiltersState
+  listColumns?: string[]
 }
 
 const DEFAULT_UI_STATE: UiState = {
@@ -46,7 +76,12 @@ const DEFAULT_UI_STATE: UiState = {
   isPreviewOpen: true,
   previewPanelWidth: 280,
   lastSection: 'images',
-  lastPath: ''
+  lastPath: '',
+  sidebarCollapsed: false,
+  sidebarWidth: 220,
+  gridSize: 'medium',
+  theme: 'dark',
+  recentPaths: []
 }
 
 let UI_STATE: UiState = { ...DEFAULT_UI_STATE }
@@ -71,11 +106,42 @@ async function loadConfig(): Promise<void> {
       }
     }
     if (parsed.uiState && typeof parsed.uiState === 'object') {
-      UI_STATE = { ...DEFAULT_UI_STATE, ...parsed.uiState }
+      const u = parsed.uiState
+      UI_STATE = {
+        ...DEFAULT_UI_STATE,
+        ...parsed.uiState,
+        sidebarWidth: typeof u.sidebarWidth === 'number' && u.sidebarWidth >= 160 && u.sidebarWidth <= 400 ? u.sidebarWidth : DEFAULT_UI_STATE.sidebarWidth,
+        recentPaths: Array.isArray(u.recentPaths) ? u.recentPaths.filter((p): p is string => typeof p === 'string').slice(0, 10) : DEFAULT_UI_STATE.recentPaths,
+        searchFilters: u.searchFilters && typeof u.searchFilters === 'object' ? u.searchFilters : undefined,
+        listColumns: Array.isArray(u.listColumns) ? u.listColumns.filter((c): c is string => typeof c === 'string') : undefined
+      }
     }
   } catch {
     // use defaults
   }
+}
+
+function getFavoritesPath(): string {
+  return join(app.getPath('userData'), FAVORITES_FILENAME)
+}
+
+async function loadFavorites(): Promise<string[]> {
+  try {
+    const path = getFavoritesPath()
+    const data = await readFile(path, 'utf-8')
+    const parsed = JSON.parse(data)
+    if (Array.isArray(parsed)) {
+      return parsed.filter((p): p is string => typeof p === 'string')
+    }
+  } catch {
+    // no file or invalid
+  }
+  return []
+}
+
+async function saveFavorites(paths: string[]): Promise<void> {
+  const path = getFavoritesPath()
+  await writeFile(path, JSON.stringify(paths, null, 2), 'utf-8')
 }
 
 async function saveConfig(): Promise<void> {
@@ -128,18 +194,32 @@ function isHiddenFile(name: string, ext: string): boolean {
   return false
 }
 
-/** Allowed roots (section paths). Paths from renderer must stay under one of these. */
+/** Allowed roots (section paths). Paths from renderer must stay under one of these. Never empty: fall back to defaults. */
 function getAllowedRoots(): string[] {
-  return Object.values(MEDIA_SECTIONS).map((p) => normalize(resolve(p)))
+  const fromConfig = Object.values(MEDIA_SECTIONS)
+    .filter((p) => p && String(p).trim() !== '')
+    .map((p) => normalize(resolve(p)))
+  if (fromConfig.length > 0) return fromConfig
+  return Object.values(DEFAULT_SECTIONS).map((p) => normalize(resolve(p)))
+}
+
+/** Case-insensitive path comparison on Windows (drive letter / folder names can differ in case). */
+function pathEquals(a: string, b: string): boolean {
+  if (platform() === 'win32') return a.toLowerCase() === b.toLowerCase()
+  return a === b
 }
 
 /** True if path is under one of the allowed section roots. */
 function isPathUnderRoot(filePath: string): boolean {
+  if (!filePath || String(filePath).trim() === '') return false
   const resolved = normalize(resolve(filePath))
   const roots = getAllowedRoots()
-  return roots.some(
-    (root) => resolved === root || (resolved.startsWith(root + sep) && resolved.length > root.length)
-  )
+  if (roots.length === 0) return false
+  return roots.some((root) => {
+    const same = pathEquals(resolved, root)
+    const under = resolved.length > root.length && (resolved.startsWith(root + sep) || (platform() === 'win32' && resolved.toLowerCase().startsWith((root + sep).toLowerCase())))
+    return same || under
+  })
 }
 
 /** Sanitize rename newName: no path separators, no '..'. */
@@ -229,8 +309,8 @@ async function readDirectoryContents(dirPath: string): Promise<FileItem[]> {
     }
 
     return items
-  } catch {
-    return []
+  } catch (err) {
+    throw err
   }
 }
 
@@ -301,6 +381,74 @@ async function buildSearchIndex(rootPath: string): Promise<FileItem[]> {
   return results
 }
 
+/** Duplicate group: same content (verified by hash). */
+interface DuplicateGroup {
+  key: string
+  files: FileItem[]
+}
+
+const DUPLICATE_HASH_CHUNK = 256 * 1024 // 256KB chunks for streaming
+
+/** Stream file and compute hash without loading into memory. */
+function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath, { highWaterMark: DUPLICATE_HASH_CHUNK })
+    stream.on('data', (chunk: Buffer) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+    stream.on('error', reject)
+  })
+}
+
+/** Yield to event loop so IPC and UI stay responsive. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((r) => setImmediate(r))
+}
+
+/**
+ * Find duplicates: group by name + size (fast), then verify by content hash.
+ * Only returns groups where at least two files have identical content. Yields between
+ * hashing each file so the UI does not freeze.
+ */
+async function findDuplicates(rootPath: string): Promise<DuplicateGroup[]> {
+  const allFiles = await buildSearchIndex(rootPath)
+  const filesOnly = allFiles.filter((f) => !f.isDirectory)
+  const byNameAndSize = new Map<string, FileItem[]>()
+  for (const f of filesOnly) {
+    const key = `${f.name}\t${f.size}`
+    let list = byNameAndSize.get(key)
+    if (!list) {
+      list = []
+      byNameAndSize.set(key, list)
+    }
+    list.push(f)
+  }
+
+  const groups: DuplicateGroup[] = []
+  for (const [key, candidates] of byNameAndSize.entries()) {
+    if (candidates.length < 2) continue
+    const byHash = new Map<string, FileItem[]>()
+    for (const file of candidates) {
+      await yieldToEventLoop()
+      try {
+        const hash = await hashFile(file.path)
+        let list = byHash.get(hash)
+        if (!list) {
+          list = []
+          byHash.set(hash, list)
+        }
+        list.push(file)
+      } catch {
+        // Skip file if unreadable (deleted, permission, etc.)
+      }
+    }
+    for (const [, files] of byHash.entries()) {
+      if (files.length >= 2) groups.push({ key, files })
+    }
+  }
+  return groups
+}
+
 async function pathExists(p: string): Promise<boolean> {
   try {
     await access(p)
@@ -315,6 +463,7 @@ async function pathExists(p: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 const MAX_THUMB_CACHE = 500
+const THUMBNAIL_MAX_DIM = 200
 const thumbnailCache = new Map<string, string>()
 
 function evictThumbnailIfNeeded(): void {
@@ -333,8 +482,7 @@ async function generateThumbnail(filePath: string): Promise<string | null> {
     if (image.isEmpty()) return null
 
     const size = image.getSize()
-    const maxDim = 200
-    const scale = Math.min(maxDim / size.width, maxDim / size.height, 1)
+    const scale = Math.min(THUMBNAIL_MAX_DIM / size.width, THUMBNAIL_MAX_DIM / size.height, 1)
 
     const resized = scale < 1
       ? image.resize({
@@ -396,6 +544,95 @@ async function getAudioMetadata(filePath: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Local HTTP media server (enables reliable Range requests for video/audio)
+// ---------------------------------------------------------------------------
+
+function startMediaServer(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    mediaServer = createServer((req, res) => {
+      if (!req.url || req.method !== 'GET') {
+        res.writeHead(405)
+        res.end()
+        return
+      }
+
+      let filePath: string
+      try {
+        filePath = decodeURIComponent(req.url.slice(1))
+      } catch {
+        res.writeHead(400)
+        res.end('Bad Request')
+        return
+      }
+
+      if (!isPathUnderRoot(filePath)) {
+        res.writeHead(403)
+        res.end('Forbidden')
+        return
+      }
+
+      let fileSize: number
+      try {
+        fileSize = statSync(filePath).size
+      } catch {
+        res.writeHead(404)
+        res.end('Not Found')
+        return
+      }
+
+      const ext = extname(filePath).toLowerCase()
+      const contentType = MEDIA_MIME_TYPES[ext] || 'application/octet-stream'
+      const rangeHeader = req.headers.range
+
+      if (rangeHeader) {
+        const match = /bytes=(\d+)-(\d*)/.exec(rangeHeader)
+        if (!match) {
+          res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` })
+          res.end()
+          return
+        }
+        const start = parseInt(match[1], 10)
+        const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
+        if (start >= fileSize || start > end) {
+          res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` })
+          res.end()
+          return
+        }
+        const chunkSize = end - start + 1
+        res.writeHead(206, {
+          'Content-Type': contentType,
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Content-Length': chunkSize,
+          'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*'
+        })
+        createReadStream(filePath, { start, end }).pipe(res)
+      } else {
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': fileSize,
+          'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*'
+        })
+        createReadStream(filePath).pipe(res)
+      }
+    })
+
+    mediaServer.listen(0, '127.0.0.1', () => {
+      const addr = mediaServer!.address()
+      if (addr && typeof addr === 'object') {
+        mediaServerPort = addr.port
+        resolve(mediaServerPort)
+      } else {
+        reject(new Error('Failed to start media server'))
+      }
+    })
+
+    mediaServer.on('error', reject)
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
 
@@ -418,13 +655,23 @@ function createWindow(): void {
     }
   })
 
-  protocol.handle('media-file', (request) => {
+  protocol.handle('media-file', async (request) => {
     const raw = request.url.slice('media-file:///'.length)
     const filePath = decodeURIComponent(raw)
     if (!isPathUnderRoot(filePath)) {
       return new Response('Forbidden', { status: 403 })
     }
-    return net.fetch(pathToFileURL(filePath).toString())
+    try {
+      const data = await readFile(filePath)
+      const ext = extname(filePath).toLowerCase()
+      const contentType = MEDIA_MIME_TYPES[ext] || 'application/octet-stream'
+      return new Response(data, {
+        status: 200,
+        headers: { 'Content-Type': contentType, 'Content-Length': String(data.length) }
+      })
+    } catch {
+      return new Response('Not Found', { status: 404 })
+    }
   })
 
   mainWindow.on('ready-to-show', () => {
@@ -447,8 +694,11 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('get-app-config', () => ({
     sections: { ...MEDIA_SECTIONS },
-    uiState: { ...UI_STATE }
+    uiState: { ...UI_STATE },
+    mediaServerPort
   }))
+
+  ipcMain.handle('get-media-port', () => mediaServerPort)
 
   ipcMain.handle(
     'set-ui-state',
@@ -462,10 +712,12 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('path-exists', async (_event, path: string) => {
     if (!path || typeof path !== 'string') return false
-    const roots = Object.values(MEDIA_SECTIONS).map((p) => normalize(resolve(p)))
+    const roots = getAllowedRoots()
     const resolved = normalize(resolve(path))
-    const isSectionRoot = roots.some((r) => resolved === r)
-    if (!isSectionRoot) return false
+    const isUnderRoot = roots.some(
+      (r) => pathEquals(resolved, r) || (resolved.length > r.length && (resolved.startsWith(r + sep) || (platform() === 'win32' && resolved.toLowerCase().startsWith((r + sep).toLowerCase()))))
+    )
+    if (!isUnderRoot) return false
     return pathExists(path)
   })
 
@@ -490,15 +742,28 @@ function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle('get-favorites', async () => loadFavorites())
+  ipcMain.handle('set-favorites', async (_event, paths: string[]) => {
+    const valid = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+    await saveFavorites(valid)
+  })
+
   ipcMain.handle('get-files', async (_event, dirPath: string) => {
-    if (!isPathUnderRoot(dirPath)) {
-      return { ok: false as const, error: 'Path not allowed' }
+    if (!dirPath || String(dirPath).trim() === '') {
+      return { ok: false as const, error: 'No folder path set. Open Settings to choose a folder for this section.' }
+    }
+    const normalizedPath = normalize(resolve(dirPath))
+    if (!isPathUnderRoot(normalizedPath)) {
+      return { ok: false as const, error: 'Path not allowed. The folder may be outside your library—check Settings.' }
     }
     try {
-      const files = await readDirectoryContents(dirPath)
+      const files = await readDirectoryContents(normalizedPath)
       return { ok: true as const, files }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to read folder'
+      const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : ''
+      let message = err instanceof Error ? err.message : 'Failed to read folder'
+      if (code === 'ENOENT') message = 'This folder does not exist. Open Settings to choose a valid folder.'
+      else if (code === 'EACCES') message = 'Access denied to this folder. Check permissions or choose another in Settings.'
       return { ok: false as const, error: message }
     }
   })
@@ -511,6 +776,23 @@ function registerIpcHandlers(): void {
   ipcMain.handle('build-search-index', async (_event, rootPath: string) => {
     if (!isPathUnderRoot(rootPath)) return []
     return buildSearchIndex(rootPath)
+  })
+
+  ipcMain.handle('find-duplicates', async (_event, rootPath: string) => {
+    if (!rootPath || String(rootPath).trim() === '') {
+      return { ok: false as const, error: 'No folder path set. Open Settings to choose a folder for this section.' }
+    }
+    const normalizedPath = normalize(resolve(rootPath))
+    if (!isPathUnderRoot(normalizedPath)) {
+      return { ok: false as const, error: 'Path not allowed. The folder may be outside your library—check Settings.' }
+    }
+    try {
+      const groups = await findDuplicates(normalizedPath)
+      return { ok: true as const, groups }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to scan for duplicates'
+      return { ok: false as const, error: message }
+    }
   })
 
   // Thumbnail generation (resized, cached)
@@ -750,6 +1032,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 app.whenReady().then(async () => {
   await loadConfig()
+  await startMediaServer()
   registerIpcHandlers()
   createWindow()
 })

@@ -3,10 +3,29 @@ import type {
   MediaSection,
   FileItem,
   FolderNode,
+  DuplicateGroup,
   ViewMode,
   SortField,
-  SortOrder
+  SortOrder,
+  GridSize,
+  Theme,
+  SearchFilters,
+  SearchFilterCategory,
+  SearchFilterModified,
+  SearchFilterSize,
+  ListColumnId
 } from '../types'
+import { api } from '../api'
+import {
+  PREVIEW_PANEL_MIN_WIDTH,
+  PREVIEW_PANEL_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  LARGE_FOLDER_WARNING_COUNT,
+  NOTIFICATION_DEFAULT_MS,
+  NOTIFICATION_WITH_ACTION_MS,
+  FAVORITES_PATH
+} from '../constants'
 
 interface Operation {
   type: 'move' | 'rename'
@@ -59,9 +78,18 @@ interface FileStore {
   viewMode: ViewMode
   sortField: SortField
   sortOrder: SortOrder
+  gridSize: GridSize
+  theme: Theme
   searchQuery: string
   searchIndex: FileItem[]
   isSearching: boolean
+  searchFilters: SearchFilters
+  listColumns: ListColumnId[]
+
+  // Sidebar
+  sidebarCollapsed: boolean
+  sidebarWidth: number
+  recentPaths: string[]
 
   // Context menu
   contextMenu: { x: number; y: number } | null
@@ -74,6 +102,17 @@ interface FileStore {
 
   // Batch rename dialog
   batchRenameOpen: boolean
+
+  // Duplicates dialog (Find duplicates tool)
+  isDuplicatesDialogOpen: boolean
+  duplicateGroups: DuplicateGroup[]
+  isScanningDuplicates: boolean
+
+  // Misplaced files dialog (files in wrong section folder)
+  isMisplacedDialogOpen: boolean
+
+  // When set, MoveDialog uses these sources instead of selectedFiles (e.g. from Duplicates dialog)
+  moveDialogOverrideSources: string[] | null
 
   // Operations history (for undo)
   operations: Operation[]
@@ -90,8 +129,14 @@ interface FileStore {
   // Settings dialog
   isSettingsOpen: boolean
 
+  // Local media server port for video/audio streaming with range request support
+  mediaServerPort: number
+
   // Media duration cache (path -> seconds), populated when video/audio loads
   mediaDurations: Record<string, number>
+
+  // Favorites (paths), persisted via main process
+  favorites: Set<string>
 
   // ── Actions ──────────────────────────────────────
 
@@ -120,14 +165,26 @@ interface FileStore {
   setViewMode: (mode: ViewMode) => void
   setSortField: (field: SortField) => void
   toggleSortOrder: () => void
+  setGridSize: (size: GridSize) => void
+  setTheme: (theme: Theme) => void
+  setSidebarCollapsed: (collapsed: boolean) => void
+  setSidebarWidth: (width: number) => void
   setSearchQuery: (query: string) => void
+  setSearchFilters: (filters: Partial<SearchFilters>) => void
+  setListColumns: (columns: ListColumnId[]) => void
+  addRecentPath: (path: string) => void
 
   setContextMenu: (pos: { x: number; y: number } | null) => void
   setRenamingPath: (path: string | null) => void
-  setMoveDialogOpen: (open: boolean, mode?: 'move' | 'copy') => void
+  setMoveDialogOpen: (open: boolean, mode?: 'move' | 'copy', overrideSources?: string[]) => void
+  setDuplicatesDialogOpen: (open: boolean) => void
+  setMisplacedDialogOpen: (open: boolean) => void
+  runFindDuplicates: () => Promise<void>
   setSettingsOpen: (open: boolean) => void
   setBatchRenameOpen: (open: boolean) => void
+  moveFilesToDestination: (sources: string[], destination: string) => Promise<void>
   setMediaDuration: (path: string, duration: number) => void
+  setFavorite: (path: string, isFavorite: boolean) => void
 
   // File operations
   moveSelectedFiles: (destination: string) => Promise<void>
@@ -164,37 +221,117 @@ function pathJoin(...parts: string[]): string {
   return parts.join(sep).replace(new RegExp(sep + '+', 'g'), sep)
 }
 
-function getVisibleFiles(state: {
+function getModifiedCutoffMs(modified: SearchFilterModified): number | null {
+  if (modified === 'any') return null
+  const now = Date.now()
+  const day = 86400000
+  if (modified === 'today') return new Date().setHours(0, 0, 0, 0)
+  if (modified === 'week') return now - 7 * day
+  if (modified === 'month') return now - 30 * day
+  if (modified === 'year') return now - 365 * day
+  return null
+}
+
+function getSizeMinBytes(sizePreset: SearchFilterSize): number | null {
+  if (sizePreset === 'any') return null
+  if (sizePreset === '1mb') return 1024 * 1024
+  if (sizePreset === '10mb') return 10 * 1024 * 1024
+  if (sizePreset === '100mb') return 100 * 1024 * 1024
+  return null
+}
+
+function categoryMatches(category: SearchFilterCategory, file: FileItem): boolean {
+  if (category === 'all') return true
+  if (category === 'folder') return file.isDirectory
+  return file.category === category
+}
+
+/** Returns the visible file list for the grid/list (search query + filters). Used by store and by FileGrid. */
+export function getVisibleFilesFromState(state: {
   files: FileItem[]
   searchQuery: string
   searchIndex: FileItem[]
+  searchFilters: SearchFilters
 }): FileItem[] {
-  if (!state.searchQuery.trim()) return state.files
-  const q = state.searchQuery.toLowerCase()
-  return state.searchIndex.filter((f) => f.name.toLowerCase().includes(q))
+  const { files, searchQuery, searchIndex, searchFilters } = state
+  let list: FileItem[]
+  if (!searchQuery.trim()) {
+    list = files
+  } else {
+    const q = searchQuery.toLowerCase()
+    list = searchIndex.filter((f) => f.name.toLowerCase().includes(q))
+  }
+  if (searchFilters.category !== 'all') {
+    list = list.filter((f) => categoryMatches(searchFilters.category, f))
+  }
+  const modifiedCutoff = getModifiedCutoffMs(searchFilters.modified)
+  if (modifiedCutoff != null) {
+    list = list.filter((f) => f.modified >= modifiedCutoff)
+  }
+  const sizeMin = getSizeMinBytes(searchFilters.sizeMin)
+  if (sizeMin != null) {
+    list = list.filter((f) => f.isDirectory || f.size >= sizeMin)
+  }
+  return list
+}
+
+function getVisibleFiles(state: FileStore): FileItem[] {
+  return getVisibleFilesFromState(state)
 }
 
 const PERSIST_UI_DEBOUNCE_MS = 600
 let persistUiTimer: ReturnType<typeof setTimeout> | null = null
+
+const MAX_RECENT_PATHS = 10
+
+/** In-flight expand folder requests: path -> promise. Reused so duplicate expands don't fire duplicate IPC. */
+const expandingFolderPromises = new Map<string, Promise<void>>()
 
 function schedulePersistUiState(get: () => FileStore): void {
   if (persistUiTimer) clearTimeout(persistUiTimer)
   persistUiTimer = setTimeout(() => {
     persistUiTimer = null
     const s = get()
-    window.api.setUiState({
+    api.setUiState({
       viewMode: s.viewMode,
       sortField: s.sortField,
       sortOrder: s.sortOrder,
       isPreviewOpen: s.isPreviewOpen,
       previewPanelWidth: s.previewPanelWidth,
       lastSection: s.activeSection,
-      lastPath: s.currentPath || ''
+      lastPath: s.currentPath || '',
+      sidebarCollapsed: s.sidebarCollapsed,
+      sidebarWidth: s.sidebarWidth,
+      gridSize: s.gridSize,
+      theme: s.theme,
+      recentPaths: s.recentPaths,
+      searchFilters: s.searchFilters,
+      listColumns: s.listColumns
     })
   }, PERSIST_UI_DEBOUNCE_MS)
 }
 
-function sortFiles(files: FileItem[], field: SortField, order: SortOrder): FileItem[] {
+function shuffleArray<T>(arr: T[]): T[] {
+  const out = [...arr]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
+
+function sortFiles(
+  files: FileItem[],
+  field: SortField,
+  order: SortOrder,
+  durationByPath?: Record<string, number>
+): FileItem[] {
+  if (field === 'random') {
+    const dirs = files.filter((f) => f.isDirectory)
+    const rest = files.filter((f) => !f.isDirectory)
+    return [...dirs, ...shuffleArray(rest)]
+  }
+
   const sorted = [...files].sort((a, b) => {
     // Directories always first
     if (a.isDirectory && !b.isDirectory) return -1
@@ -208,12 +345,24 @@ function sortFiles(files: FileItem[], field: SortField, order: SortOrder): FileI
       case 'date':
         cmp = a.modified - b.modified
         break
+      case 'created':
+        cmp = a.created - b.created
+        break
       case 'size':
         cmp = a.size - b.size
         break
       case 'type':
         cmp = a.extension.localeCompare(b.extension)
         break
+      case 'path':
+        cmp = a.path.localeCompare(b.path)
+        break
+      case 'duration': {
+        const da = durationByPath?.[a.path] ?? 0
+        const db = durationByPath?.[b.path] ?? 0
+        cmp = da - db
+        break
+      }
     }
     return order === 'asc' ? cmp : -cmp
   })
@@ -243,37 +392,81 @@ export const useFileStore = create<FileStore>((set, get) => ({
   viewMode: 'grid',
   sortField: 'name',
   sortOrder: 'asc',
+  gridSize: 'medium',
+  theme: 'dark',
   searchQuery: '',
   searchIndex: [],
   isSearching: false,
+  searchFilters: { category: 'all', modified: 'any', sizeMin: 'any' },
+  listColumns: ['name', 'size', 'type', 'modified', 'duration'],
+  sidebarCollapsed: false,
+  sidebarWidth: 220,
+  recentPaths: [],
   contextMenu: null,
   renamingPath: null,
   moveDialogMode: null,
+  moveDialogOverrideSources: null,
+  isDuplicatesDialogOpen: false,
+  duplicateGroups: [],
+  isScanningDuplicates: false,
+  isMisplacedDialogOpen: false,
   isSettingsOpen: false,
   batchRenameOpen: false,
   operations: [],
   notifications: [],
   initError: null,
   sectionPathMissing: null,
+  mediaServerPort: 0,
   mediaDurations: {},
+  favorites: new Set(),
 
   // ── Initialization ───────────────────────────────
 
   init: async () => {
     try {
       set({ initError: null })
-      const config = await window.api.getAppConfig()
+      const config = await api.getAppConfig()
       const { sections, uiState } = config
+      if (config.mediaServerPort) {
+        set({ mediaServerPort: config.mediaServerPort })
+      }
       set({ sections })
+
+      const favs = await api.getFavorites()
+      set({ favorites: new Set(Array.isArray(favs) ? favs : []) })
 
       if (uiState) {
         const updates: Partial<FileStore> = {}
         if (uiState.viewMode === 'grid' || uiState.viewMode === 'list') updates.viewMode = uiState.viewMode
-        if (uiState.sortField === 'name' || uiState.sortField === 'date' || uiState.sortField === 'size' || uiState.sortField === 'type') updates.sortField = uiState.sortField
+        const validSortFields: SortField[] = ['name', 'date', 'size', 'type', 'created', 'duration', 'path', 'random']
+        if (validSortFields.includes(uiState.sortField as SortField)) updates.sortField = uiState.sortField as SortField
         if (uiState.sortOrder === 'asc' || uiState.sortOrder === 'desc') updates.sortOrder = uiState.sortOrder
         if (typeof uiState.isPreviewOpen === 'boolean') updates.isPreviewOpen = uiState.isPreviewOpen
-        if (typeof uiState.previewPanelWidth === 'number' && uiState.previewPanelWidth >= 240 && uiState.previewPanelWidth <= 520) {
+        if (typeof uiState.previewPanelWidth === 'number' && uiState.previewPanelWidth >= PREVIEW_PANEL_MIN_WIDTH && uiState.previewPanelWidth <= PREVIEW_PANEL_MAX_WIDTH) {
           updates.previewPanelWidth = uiState.previewPanelWidth
+        }
+        if (uiState.gridSize === 'small' || uiState.gridSize === 'medium' || uiState.gridSize === 'large') updates.gridSize = uiState.gridSize
+        if (uiState.theme === 'light' || uiState.theme === 'dark') updates.theme = uiState.theme
+        if (typeof uiState.sidebarCollapsed === 'boolean') updates.sidebarCollapsed = uiState.sidebarCollapsed
+        if (typeof uiState.sidebarWidth === 'number' && uiState.sidebarWidth >= SIDEBAR_MIN_WIDTH && uiState.sidebarWidth <= SIDEBAR_MAX_WIDTH) updates.sidebarWidth = uiState.sidebarWidth
+        if (Array.isArray(uiState.recentPaths)) updates.recentPaths = uiState.recentPaths.filter((p): p is string => typeof p === 'string').slice(0, MAX_RECENT_PATHS)
+        const uFilters = uiState.searchFilters as Partial<SearchFilters> | undefined
+        if (uFilters && typeof uFilters === 'object') {
+          const validCategory: SearchFilterCategory[] = ['all', 'image', 'video', 'audio', 'document', 'folder']
+          const validModified: SearchFilterModified[] = ['any', 'today', 'week', 'month', 'year']
+          const validSize: SearchFilterSize[] = ['any', '1mb', '10mb', '100mb']
+          const current = get().searchFilters
+          updates.searchFilters = {
+            category: validCategory.includes(uFilters.category as SearchFilterCategory) ? (uFilters.category as SearchFilterCategory) : current.category,
+            modified: validModified.includes(uFilters.modified as SearchFilterModified) ? (uFilters.modified as SearchFilterModified) : current.modified,
+            sizeMin: validSize.includes(uFilters.sizeMin as SearchFilterSize) ? (uFilters.sizeMin as SearchFilterSize) : current.sizeMin
+          }
+        }
+        const uCols = uiState.listColumns as unknown
+        if (Array.isArray(uCols) && uCols.length > 0) {
+          const validIds: ListColumnId[] = ['name', 'size', 'type', 'modified', 'duration']
+          const cols = uCols.filter((c): c is ListColumnId => typeof c === 'string' && validIds.includes(c as ListColumnId))
+          if (cols.length > 0) updates.listColumns = [...new Set(cols)]
         }
         if (Object.keys(updates).length > 0) set(updates)
       }
@@ -281,7 +474,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       const state = get()
       const section = (uiState?.lastSection && state.sections[uiState.lastSection] ? uiState.lastSection : 'images') as MediaSection
       const root = state.sections[section]
-      const exists = root ? await window.api.pathExists(root) : false
+      const exists = root ? await api.pathExists(root) : false
       if (!root || !exists) {
         set({
           activeSection: section,
@@ -301,7 +494,16 @@ export const useFileStore = create<FileStore>((set, get) => ({
         if (uiState?.lastPath && typeof uiState.lastPath === 'string') {
           const r = get().sectionRoot
           const path = uiState.lastPath
-          if (r && path.startsWith(r) && path !== r) {
+          if (path === FAVORITES_PATH) {
+            set({
+              currentPath: FAVORITES_PATH,
+              pathHistory: [get().sectionRoot, FAVORITES_PATH],
+              historyIndex: 1,
+              selectedFiles: new Set(),
+              previewFile: null,
+              searchQuery: ''
+            })
+          } else if (r && path.startsWith(r) && path !== r) {
             await get().navigateTo(path)
           }
         }
@@ -324,7 +526,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const root = sections[section]
     if (!root) return
 
-    const exists = await window.api.pathExists(root)
+    const exists = await api.pathExists(root)
     if (!exists) {
       set({
         activeSection: section,
@@ -360,9 +562,9 @@ export const useFileStore = create<FileStore>((set, get) => ({
     })
 
     const [filesResult, children, index] = await Promise.all([
-      window.api.getFiles(root) as Promise<{ ok: boolean; files?: FileItem[]; error?: string }>,
-      window.api.getFolderChildren(root),
-      window.api.buildSearchIndex(root)
+      api.getFiles(root) as Promise<{ ok: boolean; files?: FileItem[]; error?: string }>,
+      api.getFolderChildren(root),
+      api.buildSearchIndex(root)
     ])
 
     const state = get()
@@ -379,7 +581,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       return
     }
     set({
-      files: sortFiles(filesResult.files, sortField, sortOrder),
+      files: sortFiles(filesResult.files, sortField, sortOrder, sortField === 'duration' ? state.mediaDurations : undefined),
       folderTree: children,
       searchIndex: index,
       isSearching: false,
@@ -408,6 +610,12 @@ export const useFileStore = create<FileStore>((set, get) => ({
       searchQuery: ''
     })
 
+    if (path === FAVORITES_PATH) {
+      schedulePersistUiState(get)
+      return
+    }
+
+    get().addRecentPath(path)
     await get().loadFiles(path)
     schedulePersistUiState(get)
   },
@@ -422,11 +630,12 @@ export const useFileStore = create<FileStore>((set, get) => ({
       historyIndex: newIndex,
       selectedFiles: new Set(),
       previewFile: null,
-      isLoading: true
+      isLoading: path !== FAVORITES_PATH
     })
+    if (path === FAVORITES_PATH) return
     const id = get().loadId + 1
     set({ loadId: id, loadError: null })
-    const result = await window.api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
+    const result = await api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
     const state = get()
     if (state.loadId !== id || state.currentPath !== path) return
     if (!result.ok || !result.files) {
@@ -434,7 +643,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       return
     }
     set({
-      files: sortFiles(result.files, state.sortField, state.sortOrder),
+      files: sortFiles(result.files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined),
       isLoading: false,
       loadError: null
     })
@@ -455,11 +664,12 @@ export const useFileStore = create<FileStore>((set, get) => ({
       historyIndex: newIndex,
       selectedFiles: new Set(),
       previewFile: null,
-      isLoading: true
+      isLoading: path !== FAVORITES_PATH
     })
+    if (path === FAVORITES_PATH) return
     const id = get().loadId + 1
     set({ loadId: id, loadError: null })
-    const result = await window.api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
+    const result = await api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
     const state = get()
     if (state.loadId !== id || state.currentPath !== path) return
     if (!result.ok || !result.files) {
@@ -467,7 +677,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       return
     }
     set({
-      files: sortFiles(result.files, state.sortField, state.sortOrder),
+      files: sortFiles(result.files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined),
       isLoading: false,
       loadError: null
     })
@@ -480,6 +690,10 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
   goUp: () => {
     const { currentPath, sectionRoot } = get()
+    if (currentPath === FAVORITES_PATH) {
+      get().navigateTo(sectionRoot)
+      return
+    }
     if (currentPath === sectionRoot) return
     const parent = currentPath.replace(/[\\/][^\\/]+$/, '')
     // Don't navigate to empty string or if parent unchanged (e.g. Windows drive root "C:\")
@@ -489,19 +703,24 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
   refresh: async () => {
     const { currentPath, sectionRoot } = get()
+    if (currentPath === FAVORITES_PATH) {
+      const favs = await api.getFavorites()
+      set({ favorites: new Set(Array.isArray(favs) ? favs : []) })
+      return
+    }
     const refreshId = get().refreshId + 1
     set({ refreshId, isLoading: true, isSearching: true })
 
     const [files, children, index] = await Promise.all([
-      window.api.getFiles(currentPath),
-      window.api.getFolderChildren(sectionRoot),
-      window.api.buildSearchIndex(sectionRoot)
+      api.getFiles(currentPath),
+      api.getFolderChildren(sectionRoot),
+      api.buildSearchIndex(sectionRoot)
     ])
 
     const state = get()
     if (state.refreshId !== refreshId) return
     set({
-      files: sortFiles(files, state.sortField, state.sortOrder),
+      files: sortFiles(files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined),
       folderTree: children,
       searchIndex: index,
       isLoading: false,
@@ -519,14 +738,14 @@ export const useFileStore = create<FileStore>((set, get) => ({
   loadFiles: async (path) => {
     const id = get().loadId + 1
     set({ loadId: id, isLoading: true, loadError: null })
-    const result = await window.api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
+    const result = await api.getFiles(path) as { ok: boolean; files?: FileItem[]; error?: string }
     const state = get()
     if (state.loadId !== id) return // stale response
     if (!result.ok || !result.files) {
       set({ files: [], isLoading: false, loadError: result.error ?? 'Failed to load folder' })
       return
     }
-    const nextFiles = sortFiles(result.files, state.sortField, state.sortOrder)
+    const nextFiles = sortFiles(result.files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined)
     set({ files: nextFiles, isLoading: false, loadError: null })
     // Clear preview if the previewed file is no longer in the current list
     const after = get()
@@ -537,26 +756,38 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   loadFolderTree: async (rootPath) => {
-    const children = await window.api.getFolderChildren(rootPath)
+    const children = await api.getFolderChildren(rootPath)
     set({ folderTree: children })
   },
 
   expandFolder: async (folderPath) => {
-    const children = await window.api.getFolderChildren(folderPath)
+    let promise = expandingFolderPromises.get(folderPath)
+    if (promise) return promise
 
-    function updateTree(nodes: FolderNode[]): FolderNode[] {
-      return nodes.map((node) => {
-        if (node.path === folderPath) {
-          return { ...node, children }
-        }
-        if (node.children) {
-          return { ...node, children: updateTree(node.children) }
-        }
-        return node
-      })
-    }
+    promise = (async () => {
+      try {
+        const children = await api.getFolderChildren(folderPath)
 
-    set((state) => ({ folderTree: updateTree(state.folderTree) }))
+        function updateTree(nodes: FolderNode[]): FolderNode[] {
+          return nodes.map((node) => {
+            if (node.path === folderPath) {
+              return { ...node, children }
+            }
+            if (node.children) {
+              return { ...node, children: updateTree(node.children) }
+            }
+            return node
+          })
+        }
+
+        set((state) => ({ folderTree: updateTree(state.folderTree) }))
+      } finally {
+        expandingFolderPromises.delete(folderPath)
+      }
+    })()
+
+    expandingFolderPromises.set(folderPath, promise)
+    return promise
   },
 
   // ── Selection ────────────────────────────────────
@@ -632,7 +863,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   setPreviewPanelWidth: (width) => {
-    set({ previewPanelWidth: Math.max(240, Math.min(520, width)) })
+    set({ previewPanelWidth: Math.max(PREVIEW_PANEL_MIN_WIDTH, Math.min(PREVIEW_PANEL_MAX_WIDTH, width)) })
     schedulePersistUiState(get)
   },
 
@@ -644,33 +875,142 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   setSortField: (field) => {
-    const { files, sortOrder } = get()
-    set({ sortField: field, files: sortFiles(files, field, sortOrder) })
+    const { files, sortOrder, mediaDurations } = get()
+    set({
+      sortField: field,
+      files: sortFiles(files, field, sortOrder, field === 'duration' ? mediaDurations : undefined)
+    })
     schedulePersistUiState(get)
   },
 
   toggleSortOrder: () => {
-    const { files, sortField, sortOrder } = get()
+    const { files, sortField, sortOrder, mediaDurations } = get()
     const newOrder = sortOrder === 'asc' ? 'desc' : 'asc'
-    set({ sortOrder: newOrder, files: sortFiles(files, sortField, newOrder) })
+    set({
+      sortOrder: newOrder,
+      files: sortFiles(files, sortField, newOrder, sortField === 'duration' ? mediaDurations : undefined)
+    })
     schedulePersistUiState(get)
   },
 
   setSearchQuery: (query) => set({ searchQuery: query }),
 
+  setSearchFilters: (filters) => {
+    set((s) => ({
+      searchFilters: {
+        ...s.searchFilters,
+        ...filters
+      }
+    }))
+    schedulePersistUiState(get)
+  },
+
+  setListColumns: (columns) => {
+    set({ listColumns: columns })
+    schedulePersistUiState(get)
+  },
+
+  setGridSize: (size) => {
+    set({ gridSize: size })
+    schedulePersistUiState(get)
+  },
+
+  setTheme: (theme) => {
+    set({ theme })
+    schedulePersistUiState(get)
+  },
+
+  setSidebarCollapsed: (collapsed) => {
+    set({ sidebarCollapsed: collapsed })
+    schedulePersistUiState(get)
+  },
+
+  setSidebarWidth: (width) => {
+    set({ sidebarWidth: Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width)) })
+    schedulePersistUiState(get)
+  },
+
+  addRecentPath: (path) => {
+    if (!path || path === get().sectionRoot) return
+    set((s) => {
+      const next = [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, MAX_RECENT_PATHS)
+      return { recentPaths: next }
+    })
+    schedulePersistUiState(get)
+  },
+
   // ── UI state ─────────────────────────────────────
 
   setContextMenu: (pos) => set({ contextMenu: pos }),
   setRenamingPath: (path) => set({ renamingPath: path }),
-  setMoveDialogOpen: (open, mode) =>
-    set({ moveDialogMode: open ? mode ?? 'move' : null }),
+  setMoveDialogOpen: (open, mode, overrideSources) =>
+    set({
+      moveDialogMode: open ? mode ?? 'move' : null,
+      moveDialogOverrideSources: open ? (overrideSources ?? null) : null
+    }),
+  setDuplicatesDialogOpen: (open) =>
+    set({ isDuplicatesDialogOpen: open, ...(open ? {} : { duplicateGroups: [] }) }),
+  setMisplacedDialogOpen: (open) => set({ isMisplacedDialogOpen: open }),
+  runFindDuplicates: async () => {
+    const { sectionRoot } = get()
+    if (!sectionRoot) {
+      get().addNotification('error', 'No section folder set. Open Settings to choose a folder.')
+      return
+    }
+    set({ isScanningDuplicates: true, duplicateGroups: [] })
+    try {
+      const result = await api.findDuplicates(sectionRoot)
+      if (result.ok) {
+        set({ duplicateGroups: result.groups, isScanningDuplicates: false })
+      } else {
+        get().addNotification('error', result.error)
+        set({ isScanningDuplicates: false })
+      }
+    } catch {
+      set({ isScanningDuplicates: false })
+    }
+  },
   setSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setBatchRenameOpen: (open) => set({ batchRenameOpen: open }),
+  moveFilesToDestination: async (sources, destination) => {
+    if (sources.length === 0) return
+    const { currentPath, sectionRoot } = get()
+    const results = await api.moveFiles(sources, destination)
+    const failures = results.filter((r: { success: boolean }) => !r.success)
+    if (failures.length > 0) {
+      get().addNotification('error', `Failed to move ${failures.length} file(s)`)
+    } else {
+      get().addNotification(
+        'success',
+        `Moved ${sources.length} file(s) to ${basename(destination)}`,
+        { actionLabel: 'Undo', onAction: () => get().undoLastOperation() }
+      )
+    }
+    set({
+      moveDialogMode: null,
+      moveDialogOverrideSources: null,
+      operations: [
+        ...get().operations,
+        { type: 'move', timestamp: Date.now(), data: { sources, destination, results } }
+      ]
+    })
+    await Promise.all([
+      get().loadFiles(currentPath),
+      get().loadFolderTree(sectionRoot)
+    ])
+  },
   setMediaDuration: (path, duration) =>
     set((s) => ({
       mediaDurations: { ...s.mediaDurations, [path]: duration }
     })),
 
+  setFavorite: (path, isFavorite) => {
+    const next = new Set(get().favorites)
+    if (isFavorite) next.add(path)
+    else next.delete(path)
+    set({ favorites: next })
+    api.setFavorites(Array.from(next))
+  },
 
   // ── File operations ──────────────────────────────
 
@@ -679,7 +1019,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const sources = Array.from(selectedFiles)
     if (sources.length === 0) return
 
-    const results = await window.api.moveFiles(sources, destination)
+    const results = await api.moveFiles(sources, destination)
     const failures = results.filter((r: { success: boolean }) => !r.success)
 
     if (failures.length > 0) {
@@ -720,7 +1060,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const sources = Array.from(selectedFiles)
     if (sources.length === 0) return
 
-    const results = await window.api.copyFiles(sources, destination)
+    const results = await api.copyFiles(sources, destination)
     const failures = results.filter((r: { success: boolean }) => !r.success)
 
     if (failures.length > 0) {
@@ -745,7 +1085,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
   renameItem: async (oldPath, newName) => {
     try {
-      await window.api.renameItem(oldPath, newName)
+      await api.renameItem(oldPath, newName)
       get().addNotification('success', `Renamed to "${newName}"`, {
         actionLabel: 'Undo',
         onAction: () => get().undoLastOperation()
@@ -782,7 +1122,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const failed: string[] = []
     for (const { path, newName } of entries) {
       try {
-        await window.api.renameItem(path, newName)
+        await api.renameItem(path, newName)
         done++
       } catch {
         failed.push(basename(path))
@@ -804,7 +1144,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
   createFolder: async (name) => {
     const { currentPath, sectionRoot } = get()
     try {
-      const newPath = await window.api.createFolder(currentPath, name)
+      const newPath = await api.createFolder(currentPath, name)
       get().addNotification('success', `Created folder "${name}"`)
 
       await Promise.all([
@@ -827,7 +1167,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const paths = Array.from(selectedFiles)
     if (paths.length === 0) return
 
-    const results = await window.api.trashFiles(paths)
+    const results = await api.trashFiles(paths)
     const failures = results.filter((r: { success: boolean }) => !r.success)
 
     if (failures.length > 0) {
@@ -850,11 +1190,11 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   openFile: (filePath) => {
-    window.api.openFile(filePath)
+    api.openFile(filePath)
   },
 
   openInExplorer: (filePath) => {
-    window.api.openInExplorer(filePath)
+    api.openInExplorer(filePath)
   },
 
   undoLastOperation: async () => {
@@ -870,7 +1210,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         const { sources, destination } = last.data as { sources: string[]; destination: string }
         const currentPaths = sources.map((s) => pathJoin(destination, basename(s)))
         const originalParent = dirname(sources[0])
-        const results = await window.api.moveFiles(currentPaths, originalParent)
+        const results = await api.moveFiles(currentPaths, originalParent)
         const failures = results.filter((r: { success: boolean }) => !r.success)
         if (failures.length > 0) {
           get().addNotification('error', `Undo failed for ${failures.length} file(s)`)
@@ -882,7 +1222,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       } else if (last.type === 'rename') {
         const { oldPath, newName } = last.data as { oldPath: string; newName: string }
         const newPath = pathJoin(dirname(oldPath), newName)
-        await window.api.renameItem(newPath, basename(oldPath))
+        await api.renameItem(newPath, basename(oldPath))
         get().addNotification('success', 'Rename undone')
         const { currentPath, sectionRoot } = get()
         await Promise.all([get().loadFiles(currentPath), get().loadFolderTree(sectionRoot)])
@@ -902,7 +1242,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
         { id, type, message, actionLabel: options?.actionLabel, onAction: options?.onAction }
       ]
     }))
-    setTimeout(() => get().removeNotification(id), options?.onAction ? 8000 : 3500)
+    setTimeout(() => get().removeNotification(id), options?.onAction ? NOTIFICATION_WITH_ACTION_MS : NOTIFICATION_DEFAULT_MS)
   },
 
   removeNotification: (id) => {

@@ -1,14 +1,16 @@
 import { memo, useRef, useCallback, useState, useEffect } from 'react'
-import { Music, Play } from 'lucide-react'
+import { Music, Play, Star } from 'lucide-react'
 import { useFileStore } from '../stores/fileStore'
 import { getFileIcon, formatFileSize, formatDuration } from '../utils/icons'
-import type { FileItem } from '../types'
+import { requestVideoThumbSlot, releaseVideoThumbSlot } from '../utils/videoThumbQueue'
+import type { FileItem, GridSize } from '../types'
 
 interface FileCardProps {
   file: FileItem
   isSelected: boolean
   isSearchResult: boolean
   currentPath: string
+  gridSize?: GridSize
   onClick: (file: FileItem, e: React.MouseEvent) => void
   onDoubleClick: (file: FileItem) => void
   onContextMenu: (e: React.MouseEvent, file: FileItem) => void
@@ -19,6 +21,7 @@ const FileCard = memo(function FileCard({
   isSelected,
   isSearchResult,
   currentPath,
+  gridSize = 'medium',
   onClick,
   onDoubleClick,
   onContextMenu
@@ -29,6 +32,9 @@ const FileCard = memo(function FileCard({
   const selectedFiles = useFileStore((s) => s.selectedFiles)
   const mediaDurations = useFileStore((s) => s.mediaDurations)
   const setMediaDuration = useFileStore((s) => s.setMediaDuration)
+  const mediaServerPort = useFileStore((s) => s.mediaServerPort)
+  const favorites = useFileStore((s) => s.favorites)
+  const setFavorite = useFileStore((s) => s.setFavorite)
 
   const isRenaming = renamingPath === file.path
   const inputRef = useRef<HTMLInputElement>(null)
@@ -51,6 +57,9 @@ const FileCard = memo(function FileCard({
   const { icon: Icon, color } = getFileIcon(file.category, file.extension)
 
   const mediaUrl = `media-file:///${encodeURIComponent(file.path.replace(/\\/g, '/'))}`
+  const streamUrl = mediaServerPort
+    ? `http://127.0.0.1:${mediaServerPort}/${encodeURIComponent(file.path)}`
+    : mediaUrl
 
   // Lazy loading via IntersectionObserver
   const [isVisible, setIsVisible] = useState(false)
@@ -92,52 +101,71 @@ const FileCard = memo(function FileCard({
     return () => { cancelled = true }
   }, [isImage, isVisible, file.path, thumbnail, useFallbackUrl])
 
-  // Generate video thumbnail by grabbing a frame with <video> + <canvas>
+  // Generate video thumbnail by grabbing a frame with <video> + <canvas>. Concurrency limited via queue.
+  const videoSlotHeldRef = useRef(false)
   useEffect(() => {
     if (!isVideo || !isVisible || videoThumb !== null) return
     let cancelled = false
 
-    const video = document.createElement('video')
-    video.preload = 'metadata'
-    video.muted = true
-    video.crossOrigin = 'anonymous'
-    video.src = mediaUrl
-
-    video.onloadeddata = () => {
-      if (!cancelled && Number.isFinite(video.duration)) {
-        setMediaDuration(file.path, video.duration)
+    requestVideoThumbSlot().then(() => {
+      if (cancelled) {
+        releaseVideoThumbSlot()
+        return
       }
-      // Seek to 1 second or 10% of duration, whichever is smaller
-      video.currentTime = Math.min(1, video.duration * 0.1)
-    }
+      videoSlotHeldRef.current = true
 
-    video.onseeked = () => {
-      if (cancelled) return
-      try {
-        const canvas = document.createElement('canvas')
-        const scale = 200 / Math.max(video.videoWidth, video.videoHeight, 1)
-        canvas.width = Math.round(video.videoWidth * scale)
-        canvas.height = Math.round(video.videoHeight * scale)
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-          setVideoThumb(canvas.toDataURL('image/jpeg', 0.7))
+      const video = document.createElement('video')
+      video.preload = 'metadata'
+      video.muted = true
+      video.crossOrigin = 'anonymous'
+      video.src = streamUrl
+
+      const releaseSlot = () => {
+        if (!videoSlotHeldRef.current) return
+        videoSlotHeldRef.current = false
+        releaseVideoThumbSlot()
+      }
+
+      video.onloadeddata = () => {
+        if (!cancelled && Number.isFinite(video.duration)) {
+          setMediaDuration(file.path, video.duration)
         }
-      } catch {
-        setVideoThumb('')
+        video.currentTime = Math.min(1, video.duration * 0.1)
       }
-      video.src = ''
-    }
 
-    video.onerror = () => {
-      if (!cancelled) setVideoThumb('')
-    }
+      video.onseeked = () => {
+        if (cancelled) return
+        try {
+          const canvas = document.createElement('canvas')
+          const scale = 200 / Math.max(video.videoWidth, video.videoHeight, 1)
+          canvas.width = Math.round(video.videoWidth * scale)
+          canvas.height = Math.round(video.videoHeight * scale)
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+            setVideoThumb(canvas.toDataURL('image/jpeg', 0.7))
+          }
+        } catch {
+          setVideoThumb('')
+        }
+        video.src = ''
+        releaseSlot()
+      }
+
+      video.onerror = () => {
+        if (!cancelled) setVideoThumb('')
+        releaseSlot()
+      }
+    })
 
     return () => {
       cancelled = true
-      video.src = ''
+      if (videoSlotHeldRef.current) {
+        videoSlotHeldRef.current = false
+        releaseVideoThumbSlot()
+      }
     }
-  }, [isVideo, isVisible, mediaUrl, videoThumb])
+  }, [isVideo, isVisible, streamUrl, videoThumb, file.path, setMediaDuration])
 
   // Load audio cover art
   useEffect(() => {
@@ -196,8 +224,9 @@ const FileCard = memo(function FileCard({
   return (
     <div
       ref={cardRef}
-      className={`file-card group relative flex flex-col items-center rounded-lg p-2 pt-2.5 cursor-pointer
-                  transition-all duration-100 select-none
+      className={`file-card group relative rounded-lg p-2 pt-2.5 cursor-pointer
+                  transition-all duration-100 select-none h-full overflow-hidden
+                  grid grid-rows-[minmax(0,1fr)_auto] gap-y-2
                   ${isSelected ? 'bg-accent/10 selection-ring' : 'hover:bg-surface-300/50'}`}
       onClick={(e) => {
         e.stopPropagation()
@@ -211,8 +240,27 @@ const FileCard = memo(function FileCard({
       draggable={!isRenaming}
       onDragStart={handleDragStart}
     >
-      {/* Thumbnail / Icon area */}
-      <div className="w-full aspect-square rounded-md overflow-hidden flex items-center justify-center bg-surface-300/30 mb-2 relative">
+      {/* Thumbnail area: row 1 takes remaining space; inner square fits and keeps image contained */}
+      <div className="min-h-0 w-full flex items-center justify-center">
+        <div className="w-full max-h-full aspect-square rounded-md overflow-hidden flex items-center justify-center bg-surface-300/30 relative">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            setFavorite(file.path, !favorites.has(file.path))
+          }}
+          className="absolute top-1 right-1 z-20 w-6 h-6 flex items-center justify-center rounded-md
+                     bg-black/40 hover:bg-black/60 text-neutral-200 hover:text-amber-400 transition-colors"
+          title={favorites.has(file.path) ? 'Remove from Favorites' : 'Add to Favorites'}
+          aria-label={favorites.has(file.path) ? 'Remove from Favorites' : 'Add to Favorites'}
+        >
+          <Star
+            size={12}
+            className={favorites.has(file.path) ? 'text-amber-400' : ''}
+            fill={favorites.has(file.path) ? 'currentColor' : 'none'}
+          />
+        </button>
         {isImage && isVisible ? (
           <>
             {thumbLoading && (
@@ -224,14 +272,14 @@ const FileCard = memo(function FileCard({
               <img
                 src={thumbnail}
                 alt={file.name}
-                className="thumbnail-img w-full h-full object-cover"
+                className="thumbnail-img w-full h-full object-contain"
                 decoding="async"
               />
             ) : useFallbackUrl ? (
               <img
                 src={mediaUrl}
                 alt={file.name}
-                className="thumbnail-img w-full h-full object-cover"
+                className="thumbnail-img w-full h-full object-contain"
                 decoding="async"
                 loading="lazy"
               />
@@ -303,9 +351,10 @@ const FileCard = memo(function FileCard({
             )}
           </div>
         )}
+        </div>
       </div>
 
-      {/* File name */}
+      {/* File name — row 2 auto so it always has space */}
       {isRenaming ? (
         <input
           ref={inputRef}
@@ -317,21 +366,21 @@ const FileCard = memo(function FileCard({
             if (e.key === 'Enter') handleRenameSubmit()
             if (e.key === 'Escape') setRenamingPath(null)
           }}
-          className="rename-input"
+          className="rename-input w-full shrink-0"
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <div className="w-full text-center px-1">
-          <p className="text-[13px] text-neutral-100 leading-tight line-clamp-2 break-all">
+        <div className="w-full min-h-[2.5em] text-center px-1 pb-0.5 overflow-hidden flex flex-col justify-center self-start">
+          <p className={`leading-tight line-clamp-2 break-all text-neutral-100 flex-shrink-0 ${gridSize === 'small' ? 'text-[11px]' : gridSize === 'large' ? 'text-[14px]' : 'text-[13px]'}`} title={file.name}>
             {file.name}
           </p>
           {!file.isDirectory && (
-            <p className="text-[12px] text-neutral-500 mt-0.5">
+            <p className={`text-neutral-500 mt-1 flex-shrink-0 ${gridSize === 'small' ? 'text-[10px]' : 'text-[12px]'}`}>
               {formatFileSize(file.size)}
             </p>
           )}
           {relativePath && (
-            <p className="text-[11px] text-neutral-500 mt-0.5 truncate" title={relativePath}>
+            <p className="text-[11px] text-neutral-500 mt-0.5 truncate flex-shrink-0" title={relativePath}>
               {relativePath}
             </p>
           )}

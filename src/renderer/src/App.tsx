@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useFileStore } from './stores/fileStore'
+import { setApiErrorNotifier } from './api'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import Toolbar from './components/Toolbar'
@@ -9,6 +10,8 @@ import StatusBar from './components/StatusBar'
 import ContextMenu from './components/ContextMenu'
 import MoveDialog from './components/MoveDialog'
 import BatchRenameDialog from './components/BatchRenameDialog'
+import DuplicatesDialog from './components/DuplicatesDialog'
+import MisplacedFilesDialog from './components/MisplacedFilesDialog'
 import SettingsDialog from './components/SettingsDialog'
 import Notifications from './components/Notifications'
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp'
@@ -25,37 +28,21 @@ export default function App() {
   const moveDialogMode = useFileStore((s) => s.moveDialogMode)
   const batchRenameOpen = useFileStore((s) => s.batchRenameOpen)
   const isSettingsOpen = useFileStore((s) => s.isSettingsOpen)
+  const isDuplicatesDialogOpen = useFileStore((s) => s.isDuplicatesDialogOpen)
+  const isMisplacedDialogOpen = useFileStore((s) => s.isMisplacedDialogOpen)
+
+  useEffect(() => {
+    setApiErrorNotifier((message) => {
+      useFileStore.getState().addNotification('error', message)
+    })
+    return () => setApiErrorNotifier(null)
+  }, [])
 
   useEffect(() => {
     init()
   }, [init])
 
-  if (initError) {
-    return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-surface-100 p-8">
-        <div className="flex flex-col items-center gap-4 max-w-md text-center">
-          <h1 className="text-lg font-semibold text-neutral-100">
-            Failed to load library
-          </h1>
-          <p className="text-sm text-neutral-400 leading-relaxed">
-            {initError}
-          </p>
-          <button
-            onClick={() => {
-              clearInitError()
-              init()
-            }}
-            className="px-4 py-2.5 bg-accent/20 text-accent-light text-sm font-medium rounded-lg
-                       hover:bg-accent/30 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts — must run before any conditional return (hooks rule)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const store = useFileStore.getState()
@@ -84,6 +71,14 @@ export default function App() {
         }
         if (store.isSettingsOpen) {
           store.setSettingsOpen(false)
+          return
+        }
+        if (store.isDuplicatesDialogOpen) {
+          store.setDuplicatesDialogOpen(false)
+          return
+        }
+        if (store.isMisplacedDialogOpen) {
+          store.setMisplacedDialogOpen(false)
           return
         }
         store.clearSelection()
@@ -190,12 +185,43 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [showShortcutHelp])
 
-  return (
-    <div className="h-screen w-screen flex flex-col bg-surface-100 overflow-hidden">
-      <TitleBar />
+  const theme = useFileStore((s) => s.theme)
 
-      <div className="flex flex-1 min-h-0">
-        <Sidebar />
+  if (initError) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-surface-100 p-8">
+        <div className="flex flex-col items-center gap-4 max-w-md text-center">
+          <h1 className="text-lg font-semibold text-neutral-100">
+            Failed to load library
+          </h1>
+          <p className="text-sm text-neutral-400 leading-relaxed">
+            {initError}
+          </p>
+          <button
+            onClick={() => {
+              clearInitError()
+              init()
+            }}
+            className="px-4 py-2.5 bg-accent/20 text-accent-light text-sm font-medium rounded-lg
+                       hover:bg-accent/30 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={`h-screen w-screen flex flex-col overflow-hidden ${theme === 'light' ? 'light-theme' : ''}`}
+      data-theme={theme}
+    >
+      <div className="h-full w-full flex flex-col bg-surface-100 overflow-hidden">
+        <TitleBar />
+
+        <div className="flex flex-1 min-h-0">
+          <Sidebar />
 
         <div className="flex-1 flex flex-col min-w-0">
           <Toolbar />
@@ -222,10 +248,13 @@ export default function App() {
 
       {moveDialogMode && <MoveDialog mode={moveDialogMode} />}
       {batchRenameOpen && <BatchRenameDialog />}
+      {isDuplicatesDialogOpen && <DuplicatesDialog />}
+      {isMisplacedDialogOpen && <MisplacedFilesDialog />}
       {isSettingsOpen && <SettingsDialog />}
       {showShortcutHelp && <KeyboardShortcutHelp onClose={() => setShowShortcutHelp(false)} />}
 
       <Notifications />
+      </div>
     </div>
   )
 }

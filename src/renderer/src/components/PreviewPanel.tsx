@@ -7,13 +7,13 @@ import {
   Move,
   Trash2,
   Copy,
-  GripVertical,
-  Maximize2
+  GripVertical
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { useFileStore } from '../stores/fileStore'
 import { getFileIcon, formatFileSize, formatDuration } from '../utils/icons'
 import AudioPlayer from './AudioPlayer'
+import VideoPlayer, { FullscreenVideoPlayer } from './VideoPlayer'
 
 const TEXT_PREVIEW_EXT = new Set([
   '.txt', '.md', '.csv', '.json', '.xml', '.yaml', '.yml', '.log',
@@ -38,9 +38,9 @@ export default function PreviewPanel() {
   const [copied, setCopied] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const mediaDurations = useFileStore((s) => s.mediaDurations)
+  const mediaServerPort = useFileStore((s) => s.mediaServerPort)
   const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(null)
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -157,7 +157,10 @@ export default function PreviewPanel() {
     setTimeout(() => setCopied(false), 1500)
   }
 
-  const mediaUrl = `media-file:///${encodeURIComponent(file.path.replace(/\\/g, '/'))}`
+  const mediaUrl =
+    (isVideo || isAudio) && mediaServerPort
+      ? `http://127.0.0.1:${mediaServerPort}/${encodeURIComponent(file.path)}`
+      : `media-file:///${encodeURIComponent(file.path.replace(/\\/g, '/'))}`
 
   return (
     <div
@@ -186,72 +189,203 @@ export default function PreviewPanel() {
         </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Preview area — skip the big icon block for text-previewable files */}
-        {!isTextPreviewable && (
-          <div className="p-4 pb-0">
-            <div className="w-full rounded-lg overflow-hidden bg-surface-300/30 flex items-center justify-center">
-              {isImage ? (
-                <img
-                  src={mediaUrl}
-                  alt={file.name}
-                  className="w-full object-contain max-h-[300px]"
-                  decoding="async"
-                />
-              ) : isVideo ? (
-                <div className="relative">
-                  <video
-                    ref={videoRef}
-                    src={mediaUrl}
-                    className="w-full max-h-[300px]"
-                    controls
-                    preload="metadata"
-                    onLoadedMetadata={(e) => {
-                      const v = e.currentTarget
-                      if (v.videoWidth && v.videoHeight) {
-                        setVideoResolution({ width: v.videoWidth, height: v.videoHeight })
-                      }
-                    }}
-                  />
+      {/* Content: for video, full-width player on top + scrollable info below; otherwise single scroll */}
+      {isVideo ? (
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Video fills panel width, height by aspect ratio */}
+          <div className="shrink-0 p-2">
+            <div className="w-full rounded-lg overflow-hidden bg-black">
+              <VideoPlayer
+                src={mediaUrl}
+                maxHeight="none"
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget as HTMLVideoElement
+                  if (v.videoWidth && v.videoHeight) {
+                    setVideoResolution({ width: v.videoWidth, height: v.videoHeight })
+                  }
+                }}
+                onRequestFullscreen={() => setIsVideoFullscreen(true)}
+              />
+            </div>
+          </div>
+          {/* Scrollable file info, path, actions */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="border-t border-surface-500/25 mt-2" />
+            <div className="px-4 pt-4 pb-4 space-y-3">
+              <div>
+                <p className="text-[14px] font-medium text-neutral-100 break-all leading-snug">
+                  {file.name}
+                </p>
+              </div>
+              <div className="space-y-2">
+                {!file.isDirectory && (
+                  <div className="flex justify-between">
+                    <span className="text-[11px] text-neutral-500">Size</span>
+                    <span className="text-[12px] text-neutral-300">{formatFileSize(file.size)}</span>
+                  </div>
+                )}
+                {(mediaDurations[file.path] != null || videoResolution) && (
+                  <>
+                    {mediaDurations[file.path] != null && (
+                      <div className="flex justify-between">
+                        <span className="text-[11px] text-neutral-500">Duration</span>
+                        <span className="text-[12px] text-neutral-300">{formatDuration(mediaDurations[file.path])}</span>
+                      </div>
+                    )}
+                    {videoResolution && (
+                      <div className="flex justify-between">
+                        <span className="text-[11px] text-neutral-500">Resolution</span>
+                        <span className="text-[12px] text-neutral-300 tabular-nums">
+                          {videoResolution.width}×{videoResolution.height}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-[11px] text-neutral-500">Type</span>
+                  <span className="text-[12px] text-neutral-300 flex items-center gap-1.5">
+                    <Icon size={11} style={{ color }} />
+                    {file.isDirectory ? 'Folder' : file.extension.slice(1).toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[11px] text-neutral-500">Modified</span>
+                  <span className="text-[12px] text-neutral-300">
+                    {format(new Date(file.modified), 'dd MMM yyyy, HH:mm')}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[11px] text-neutral-500">Created</span>
+                  <span className="text-[12px] text-neutral-300">
+                    {format(new Date(file.created), 'dd MMM yyyy, HH:mm')}
+                  </span>
+                </div>
+              </div>
+              <div className="border-t border-surface-500/25 pt-3 mt-3" />
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] text-neutral-500">Path</span>
                   <button
-                    type="button"
-                    onClick={() => setIsVideoFullscreen(true)}
-                    className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-black/60 text-white hover:bg-black/80 transition-colors"
-                    title="Theater / Fullscreen"
-                    aria-label="Expand video to fullscreen"
+                    onClick={handleCopyPath}
+                    className="text-[11px] text-neutral-500 hover:text-accent transition-colors flex items-center gap-1"
+                    title="Copy full path"
                   >
-                    <Maximize2 size={14} />
+                    <Copy size={10} />
+                    {copied ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
-              ) : isAudio ? (
-                <div className="flex flex-col items-center gap-3 p-4 w-full">
-                  {audioMeta?.cover ? (
-                    <img
-                      src={audioMeta.cover}
-                      alt="Album art"
-                      className="w-32 h-32 rounded-lg object-cover shadow-lg shadow-black/30"
-                      decoding="async"
-                    />
-                  ) : (
-                    <div className="w-32 h-32 rounded-lg bg-surface-400/30 flex items-center justify-center">
-                      <Icon size={40} style={{ color }} className="opacity-40" />
-                    </div>
-                  )}
+                <p className="text-[10px] text-neutral-500 break-all bg-surface-300/30 rounded px-2 py-1.5 font-mono">
+                  {file.path}
+                </p>
+              </div>
+              <div className="border-t border-surface-500/25 pt-3 mt-3" />
+              <div className="space-y-1.5">
+                <button
+                  onClick={() => openFile(file.path)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-neutral-400 hover:bg-surface-300/50 hover:text-neutral-200 transition-colors"
+                >
+                  <ExternalLink size={13} />
+                  Open File
+                </button>
+                <button
+                  onClick={() => openInExplorer(file.path)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-neutral-400 hover:bg-surface-300/50 hover:text-neutral-200 transition-colors"
+                >
+                  <FolderOpen size={13} />
+                  Show in Explorer
+                </button>
+                <button
+                  onClick={() => setRenamingPath(file.path)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-neutral-400 hover:bg-surface-300/50 hover:text-neutral-200 transition-colors"
+                >
+                  <Pencil size={13} />
+                  Rename
+                </button>
+                <button
+                  onClick={() => setMoveDialogOpen(true, 'move')}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-neutral-400 hover:bg-surface-300/50 hover:text-neutral-200 transition-colors"
+                  title="Move selected items to another folder"
+                >
+                  <Move size={13} />
+                  Move to...
+                </button>
+                <button
+                  onClick={() => setMoveDialogOpen(true, 'copy')}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-neutral-400 hover:bg-surface-300/50 hover:text-neutral-200 transition-colors"
+                  title="Copy selected items to another folder"
+                >
+                  <Copy size={13} />
+                  Copy to...
+                </button>
+                <button
+                  onClick={trashSelected}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12px]
+                             text-red-400/70 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                  title="Move selected items to Recycle Bin"
+                >
+                  <Trash2 size={13} />
+                  Move to Recycle Bin
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          {/* Preview area — skip the big icon block for text-previewable files */}
+          {!isTextPreviewable && (
+            <div className="p-4 pb-0">
+              <div className="w-full rounded-lg overflow-hidden bg-surface-300/30 flex items-center justify-center">
+                {isImage ? (
+                  <img
+                    src={mediaUrl}
+                    alt={file.name}
+                    className="w-full object-contain max-h-[300px]"
+                    decoding="async"
+                  />
+                ) : isAudio ? (
+                <div className="flex flex-col items-center gap-4 p-5 w-full">
+                  {/* Album art */}
+                  <div className="relative">
+                    {audioMeta?.cover ? (
+                      <img
+                        src={audioMeta.cover}
+                        alt="Album art"
+                        className="w-36 h-36 rounded-xl object-cover shadow-xl shadow-black/40"
+                        decoding="async"
+                      />
+                    ) : (
+                      <div className="w-36 h-36 rounded-xl bg-gradient-to-br from-surface-400/40 to-surface-500/20 flex items-center justify-center border border-surface-500/20">
+                        <Icon size={44} style={{ color }} className="opacity-30" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Track info */}
                   {audioMeta && (audioMeta.title || audioMeta.artist) && (
-                    <div className="text-center">
+                    <div className="text-center space-y-0.5 max-w-full">
                       {audioMeta.title && (
-                        <p className="text-[12px] text-neutral-300 font-medium">{audioMeta.title}</p>
+                        <p className="text-[13px] text-neutral-200 font-medium truncate">{audioMeta.title}</p>
                       )}
                       {audioMeta.artist && (
-                        <p className="text-[11px] text-neutral-500">{audioMeta.artist}</p>
+                        <p className="text-[11px] text-neutral-400">{audioMeta.artist}</p>
                       )}
                       {audioMeta.album && (
-                        <p className="text-[10px] text-neutral-600">{audioMeta.album}</p>
+                        <p className="text-[10px] text-neutral-500 italic">{audioMeta.album}</p>
                       )}
                     </div>
                   )}
-                  <AudioPlayer src={mediaUrl} />
+
+                  {/* Player */}
+                  <div className="w-full">
+                    <AudioPlayer src={mediaUrl} />
+                  </div>
                 </div>
               ) : isPdf ? (
                 <div className="w-full py-6 flex flex-col items-center justify-center gap-2 px-4">
@@ -440,30 +574,14 @@ export default function PreviewPanel() {
           </div>
         </div>
       </div>
+      )}
 
-      {/* Video fullscreen/theater overlay */}
+      {/* Video fullscreen overlay */}
       {isVideoFullscreen && isVideo && (
-        <div
-          className="fixed inset-0 z-[55] bg-black flex flex-col items-center justify-center"
-          role="dialog"
-          aria-label="Video fullscreen"
-        >
-          <button
-            type="button"
-            onClick={() => setIsVideoFullscreen(false)}
-            className="absolute top-4 right-4 z-10 w-10 h-10 flex items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
-            aria-label="Close fullscreen"
-          >
-            <X size={20} />
-          </button>
-          <video
-            src={mediaUrl}
-            controls
-            autoPlay
-            className="max-w-full max-h-full"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+        <FullscreenVideoPlayer
+          src={mediaUrl}
+          onClose={() => setIsVideoFullscreen(false)}
+        />
       )}
     </div>
   )

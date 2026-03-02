@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, FolderOpen } from 'lucide-react'
+import { X, FolderOpen, Sun, Moon } from 'lucide-react'
 
 async function getVersion(): Promise<string> {
   try {
@@ -18,6 +18,8 @@ export default function SettingsDialog() {
   const setActiveSection = useFileStore((s) => s.setActiveSection)
   const setSettingsOpen = useFileStore((s) => s.setSettingsOpen)
   const addNotification = useFileStore((s) => s.addNotification)
+  const theme = useFileStore((s) => s.theme)
+  const setTheme = useFileStore((s) => s.setTheme)
 
   const [paths, setPaths] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<string | null>(null)
@@ -73,6 +75,29 @@ export default function SettingsDialog() {
         </div>
 
         <div className="p-4 overflow-y-auto">
+          <div className="mb-4">
+            <label className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider block mb-2">
+              Theme
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTheme('light')}
+                className={`flex-1 flex items-center justify-center gap-2 h-9 rounded-lg border transition-colors
+                  ${theme === 'light' ? 'bg-accent/20 border-accent/50 text-accent-light' : 'bg-surface-300 border-surface-500/40 text-neutral-400 hover:text-neutral-200'}`}
+              >
+                <Sun size={16} />
+                Light
+              </button>
+              <button
+                onClick={() => setTheme('dark')}
+                className={`flex-1 flex items-center justify-center gap-2 h-9 rounded-lg border transition-colors
+                  ${theme === 'dark' ? 'bg-accent/20 border-accent/50 text-accent-light' : 'bg-surface-300 border-surface-500/40 text-neutral-400 hover:text-neutral-200'}`}
+              >
+                <Moon size={16} />
+                Dark
+              </button>
+            </div>
+          </div>
           <p className="text-[12px] text-neutral-400 mb-4">
             Choose the folder for each library section. Paths are saved automatically.
           </p>
