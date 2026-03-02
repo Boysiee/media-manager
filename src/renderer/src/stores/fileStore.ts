@@ -83,6 +83,8 @@ interface FileStore {
   searchQuery: string
   searchIndex: FileItem[]
   isSearching: boolean
+  /** When indexing, number of files indexed so far (for status bar progress). */
+  indexProgress: number | null
   searchFilters: SearchFilters
   listColumns: ListColumnId[]
 
@@ -397,6 +399,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
   searchQuery: '',
   searchIndex: [],
   isSearching: false,
+  indexProgress: null,
   searchFilters: { category: 'all', modified: 'any', sizeMin: 'any' },
   listColumns: ['name', 'size', 'type', 'modified', 'duration'],
   sidebarCollapsed: false,
@@ -558,42 +561,72 @@ export const useFileStore = create<FileStore>((set, get) => ({
       pathHistory: [root],
       historyIndex: 0,
       isSearching: true,
+      indexProgress: 0,
       loadError: null
     })
 
-    const [filesResult, children, index] = await Promise.all([
-      api.getFiles(root) as Promise<{ ok: boolean; files?: FileItem[]; error?: string }>,
-      api.getFolderChildren(root),
-      api.buildSearchIndex(root)
-    ])
+    let unsubProgress: (() => void) | undefined
+    if (typeof (window as { api?: { subscribeSearchIndexProgress?: (cb: (count: number) => void) => () => void } }).api?.subscribeSearchIndexProgress === 'function') {
+      unsubProgress = (window as { api: { subscribeSearchIndexProgress: (cb: (count: number) => void) => () => void } }).api.subscribeSearchIndexProgress((count) => set({ indexProgress: count }))
+    }
 
-    const state = get()
-    if (state.sectionLoadId !== sectionId) return
-    const { sortField, sortOrder } = state
-    if (!filesResult.ok || !filesResult.files) {
+    try {
+      const [filesResult, childrenResult, indexResult] = await Promise.all([
+        api.getFiles(root) as Promise<{ ok: boolean; files?: FileItem[]; error?: string }>,
+        api.getFolderChildren(root),
+        api.buildSearchIndex(root)
+      ])
+
+      const state = get()
+      if (state.sectionLoadId !== sectionId) return
+      const { sortField, sortOrder } = state
+      const folderTree = childrenResult.ok ? childrenResult.children : []
+      const searchIndex = indexResult.ok ? indexResult.files : []
+      if (!filesResult.ok || !filesResult.files) {
+        const err = filesResult.error ?? 'Failed to load folder'
+        const pathMissing = /does not exist|not found|not allowed|Path not allowed/i.test(err)
+        set({
+          files: [],
+          folderTree,
+          searchIndex,
+          isSearching: false,
+          indexProgress: null,
+          loadError: err,
+          sectionPathMissing: pathMissing ? section : null
+        })
+        return
+      }
+      if (!indexResult.ok && indexResult.error) {
+        set({
+          files: sortFiles(filesResult.files, sortField, sortOrder, sortField === 'duration' ? state.mediaDurations : undefined),
+          folderTree,
+          searchIndex: [],
+          isSearching: false,
+          indexProgress: null,
+          sectionPathMissing: null,
+          loadError: null
+        })
+        return
+      }
       set({
-        files: [],
-        folderTree: children ?? [],
-        searchIndex: index ?? [],
+        files: sortFiles(filesResult.files, sortField, sortOrder, sortField === 'duration' ? state.mediaDurations : undefined),
+        folderTree,
+        searchIndex,
         isSearching: false,
-        loadError: filesResult.error ?? 'Failed to load folder'
+        indexProgress: null,
+        sectionPathMissing: null,
+        loadError: null
       })
-      return
+      const after = get()
+      const visible = getVisibleFiles(after)
+      if (after.previewFile && !visible.some((f) => f.path === after.previewFile!.path)) {
+        set({ previewFile: null })
+      }
+      schedulePersistUiState(get)
+    } finally {
+      unsubProgress?.()
+      set({ indexProgress: null })
     }
-    set({
-      files: sortFiles(filesResult.files, sortField, sortOrder, sortField === 'duration' ? state.mediaDurations : undefined),
-      folderTree: children,
-      searchIndex: index,
-      isSearching: false,
-      sectionPathMissing: null,
-      loadError: null
-    })
-    const after = get()
-    const visible = getVisibleFiles(after)
-    if (after.previewFile && !visible.some((f) => f.path === after.previewFile!.path)) {
-      set({ previewFile: null })
-    }
-    schedulePersistUiState(get)
   },
 
   navigateTo: async (path) => {
@@ -709,23 +742,49 @@ export const useFileStore = create<FileStore>((set, get) => ({
       return
     }
     const refreshId = get().refreshId + 1
-    set({ refreshId, isLoading: true, isSearching: true })
+    set({ refreshId, isLoading: true, isSearching: true, indexProgress: 0, loadError: null })
 
-    const [files, children, index] = await Promise.all([
-      api.getFiles(currentPath),
-      api.getFolderChildren(sectionRoot),
-      api.buildSearchIndex(sectionRoot)
-    ])
+    let unsubProgress: (() => void) | undefined
+    if (typeof (window as { api?: { subscribeSearchIndexProgress?: (cb: (count: number) => void) => () => void } }).api?.subscribeSearchIndexProgress === 'function') {
+      unsubProgress = (window as { api: { subscribeSearchIndexProgress: (cb: (count: number) => void) => () => void } }).api.subscribeSearchIndexProgress((count) => set({ indexProgress: count }))
+    }
 
-    const state = get()
-    if (state.refreshId !== refreshId) return
-    set({
-      files: sortFiles(files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined),
-      folderTree: children,
-      searchIndex: index,
-      isLoading: false,
-      isSearching: false
-    })
+    try {
+      const [filesResult, childrenResult, indexResult] = await Promise.all([
+        api.getFiles(currentPath) as Promise<{ ok: boolean; files?: FileItem[]; error?: string }>,
+        api.getFolderChildren(sectionRoot),
+        api.buildSearchIndex(sectionRoot)
+      ])
+
+      const state = get()
+      if (state.refreshId !== refreshId) return
+      const folderTree = childrenResult.ok ? childrenResult.children : state.folderTree
+      const searchIndex = indexResult.ok ? indexResult.files : state.searchIndex
+      if (!filesResult.ok || !filesResult.files) {
+        set({
+          files: [],
+          folderTree,
+          searchIndex,
+          isLoading: false,
+          isSearching: false,
+          indexProgress: null,
+          loadError: filesResult.error ?? 'Failed to load folder'
+        })
+      } else {
+        set({
+          files: sortFiles(filesResult.files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined),
+          folderTree,
+          searchIndex,
+          isLoading: false,
+          isSearching: false,
+          indexProgress: null,
+          loadError: null
+        })
+      }
+    } finally {
+      unsubProgress?.()
+      set({ indexProgress: null })
+    }
     const after = get()
     const visible = getVisibleFiles(after)
     if (after.previewFile && !visible.some((f) => f.path === after.previewFile!.path)) {
@@ -742,7 +801,14 @@ export const useFileStore = create<FileStore>((set, get) => ({
     const state = get()
     if (state.loadId !== id) return // stale response
     if (!result.ok || !result.files) {
-      set({ files: [], isLoading: false, loadError: result.error ?? 'Failed to load folder' })
+      const err = result.error ?? 'Failed to load folder'
+      const pathMissing = /does not exist|not found|not allowed|Path not allowed/i.test(err)
+      set({
+        files: [],
+        isLoading: false,
+        loadError: err,
+        sectionPathMissing: pathMissing && path === state.sectionRoot ? state.activeSection : state.sectionPathMissing
+      })
       return
     }
     const nextFiles = sortFiles(result.files, state.sortField, state.sortOrder, state.sortField === 'duration' ? state.mediaDurations : undefined)
@@ -756,8 +822,8 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   loadFolderTree: async (rootPath) => {
-    const children = await api.getFolderChildren(rootPath)
-    set({ folderTree: children })
+    const result = await api.getFolderChildren(rootPath)
+    if (result.ok) set({ folderTree: result.children })
   },
 
   expandFolder: async (folderPath) => {
@@ -766,8 +832,8 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
     promise = (async () => {
       try {
-        const children = await api.getFolderChildren(folderPath)
-
+        const result = await api.getFolderChildren(folderPath)
+        const children = result.ok ? result.children : []
         function updateTree(nodes: FolderNode[]): FolderNode[] {
           return nodes.map((node) => {
             if (node.path === folderPath) {
@@ -779,7 +845,6 @@ export const useFileStore = create<FileStore>((set, get) => ({
             return node
           })
         }
-
         set((state) => ({ folderTree: updateTree(state.folderTree) }))
       } finally {
         expandingFolderPromises.delete(folderPath)

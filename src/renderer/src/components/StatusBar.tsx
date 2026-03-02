@@ -16,6 +16,7 @@ export default function StatusBar() {
   const searchIndex = useFileStore((s) => s.searchIndex)
   const searchFilters = useFileStore((s) => s.searchFilters)
   const isSearching = useFileStore((s) => s.isSearching)
+  const indexProgress = useFileStore((s) => s.indexProgress)
 
   const displayFiles = getVisibleFilesFromState({ files, searchQuery, searchIndex, searchFilters })
 
@@ -70,7 +71,7 @@ export default function StatusBar() {
         {isSearching && (
           <span className="flex items-center gap-1.5 text-[12px] text-neutral-400">
             <span className="w-3.5 h-3.5 border-2 border-accent/30 border-t-accent rounded-full animate-spin shrink-0" aria-hidden />
-            Indexing…
+            Indexing…{indexProgress != null ? ` ${indexProgress.toLocaleString()} files` : ''}
           </span>
         )}
         <span className="text-[12px] text-neutral-400">

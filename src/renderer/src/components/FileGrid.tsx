@@ -144,15 +144,18 @@ export default function FileGrid() {
   )
 
   if (sectionPathMissing === activeSection) {
+    const isDriveUnavailable = loadError && /does not exist|not found/i.test(loadError)
     return (
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="flex flex-col items-center gap-4 max-w-sm text-center">
           <span className="text-4xl opacity-50">📁</span>
           <p className="text-[14px] text-neutral-300">
-            Path not found
+            {isDriveUnavailable ? 'Drive not available' : 'Path not found'}
           </p>
           <p className="text-[12px] text-neutral-500">
-            The folder for this section doesn&apos;t exist or isn&apos;t available. Choose a folder in Settings.
+            {isDriveUnavailable
+              ? 'The folder may be on a disconnected drive. Choose a folder in Settings or reconnect the drive.'
+              : "The folder for this section doesn't exist or isn't available. Choose a folder in Settings."}
           </p>
           <button
             onClick={() => setSettingsOpen(true)}

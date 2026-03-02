@@ -63,7 +63,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 
 - ✓ **loadFiles**: Sets `isLoading` true/false—good. Ensure every path that updates `files` also sets `isLoading` (e.g. goBack/goForward, refresh).
 - ✓ **Folder tree expand**: No loading indicator when expanding. Show a small spinner or “Loading…” next to the folder until `getFolderChildren` resolves.
-- **Search index**: “Indexing…” in status bar is good. If possible, show progress (e.g. “Indexing… 45%”) so the user knows it’s not stuck.
+- ✓ **Search index**: “Indexing…” in status bar with live file count (e.g. “Indexing… 1,234 files”) so the user knows it’s not stuck. _(Done: buildSearchIndex progress callback; subscribeSearchIndexProgress in preload; status bar shows count.)_
 - ✓ **Move**: “Moving...” on the button is good. Disable the dialog content (e.g. overlay) so user doesn’t change selection or close during move. _(Done: overlay + spinner.)_
 
 ### Error States
@@ -90,7 +90,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 ### Error Handling
 
 - ✓ **Centralized API layer**: All `window.api.`_ calls are ad hoc. Consider a thin wrapper that catches rejections and turns them into notifications or a global error handler, so you don’t have to remember try/catch everywhere. _(Done: api.ts with setApiErrorNotifier; store uses api._; App sets notifier to addNotification.)_
-- **Main process**: IPC handlers use try/catch and return errors in result objects (e.g. move, trash). Good. For `get-files`, `get-folder-children`, `build-search-index`, you return [] or empty on error; consider returning `{ error: string }` for critical paths so the UI can show “Failed to load” instead of “Empty folder.”
+- ✓ **Main process**: `get-files`, `get-folder-children`, and `build-search-index` now return `{ ok: true, files }` / `{ ok: true, children }` or `{ ok: false, error: string }` so the UI can show “Failed to load” / “Unable to load folder” instead of empty content. _(Done.)_
 - **Logging**: No structured logging. In production, use a small logger (e.g. levels: error/warn/info) and log to a file or devtools; avoid console in production for sensitive paths. In dev, log IPC errors and failed file ops.
 
 ### Security
@@ -103,7 +103,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 
 - **Types**: Shared `FileItem`, `FolderNode` in types.ts; main has its own duplicate interfaces. Consider a shared types package or single source of truth so main and renderer stay in sync.
 - **Constants**: Section roots and extension sets live in main; section labels/colors in renderer. If you add a settings screen, section config (id, label, default path, extensions) could live in one place (e.g. a config module used by both).
-- ✓ **Magic numbers**: Replace with named constants (e.g. THUMBNAIL*MAX_DIM = 200, SEARCH_DEBOUNCE_MS = 200, MAX_THUMB_CACHE = 500). *(Done: renderer constants.ts — SEARCH*DEBOUNCE_MS, PREVIEW_PANEL*_, SIDEBAR\__, LARGE*FOLDER_WARNING_COUNT, NOTIFICATION*\*; main THUMBNAIL*MAX_DIM.)*
+- ✓ **Magic numbers**: Replace with named constants (e.g. THUMBNAIL*MAX_DIM = 200, SEARCH_DEBOUNCE_MS = 200, MAX_THUMB_CACHE = 500). *(Done: renderer constants.ts — SEARCH*DEBOUNCE_MS, PREVIEW_PANEL*\_, SIDEBAR\_\_, LARGE*FOLDER_WARNING_COUNT, NOTIFICATION*\*; main THUMBNAIL*MAX_DIM.)*
 
 ---
 
@@ -129,7 +129,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 
 - ✓ **Very large folders**: 50k files in one folder: list might be slow to sort/filter; virtual list helps. Consider warning or pagination if count exceeds e.g. 10k. _(Done: status bar shows "Large folder (N items)" when display count ≥ 10k; LARGE_FOLDER_WARNING_COUNT constant.)_
 - **Long paths**: Windows MAX_PATH is 260; longer paths can fail. Consider enabling long path support in Node/Electron if needed and document for users.
-- **Removable drives**: If section root is on a removable drive that gets disconnected, subsequent operations will fail. Handle “path not found” and show “Drive not available” and optionally offer to remove or change the section path.
+- ✓ **Removable drives**: When section root is missing (e.g. disconnected drive), set `sectionPathMissing` and show “Drive not available” with message to choose a folder in Settings or reconnect. _(Done: path-not-found errors from get-files/setActiveSection set sectionPathMissing; FileGrid shows “Drive not available” vs “Path not found”.)_
 
 ---
 
@@ -155,4 +155,4 @@ Implementing the high-priority items will make the app faster, correct under rap
 
 ---
 
-_Document created from codebase review. Rows/items marked ✓ were implemented in a prior session. Last updated: March 2025 (magic numbers → constants, very large folder warning)._
+_Document created from codebase review. Rows/items marked ✓ were implemented in a prior session. Last updated: March 2025 (main process error returns; search index progress; removable drive handling)._

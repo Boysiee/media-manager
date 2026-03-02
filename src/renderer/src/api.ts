@@ -57,11 +57,19 @@ export const api = {
   getFiles: (dirPath: string): Promise<{ ok: boolean; files?: import('./types').FileItem[]; error?: string }> =>
     wrap(window.api.getFiles(dirPath)),
 
-  getFolderChildren: (dirPath: string): Promise<import('./types').FolderNode[]> =>
-    wrap(window.api.getFolderChildren(dirPath)),
+  getFolderChildren: (
+    dirPath: string
+  ): Promise<
+    | { ok: true; children: import('./types').FolderNode[] }
+    | { ok: false; error: string }
+  > => wrap(window.api.getFolderChildren(dirPath)),
 
-  buildSearchIndex: (rootPath: string): Promise<import('./types').FileItem[]> =>
-    wrap(window.api.buildSearchIndex(rootPath)),
+  buildSearchIndex: (
+    rootPath: string
+  ): Promise<
+    | { ok: true; files: import('./types').FileItem[] }
+    | { ok: false; error: string }
+  > => wrap(window.api.buildSearchIndex(rootPath)),
 
   findDuplicates: (
     rootPath: string

@@ -330,8 +330,11 @@ async function getFolderChildren(dirPath: string): Promise<FolderNode[]> {
   }
 }
 
-// Batched recursive walk for search index
-async function buildSearchIndex(rootPath: string): Promise<FileItem[]> {
+// Batched recursive walk for search index; optional onProgress(count) called after each batch
+async function buildSearchIndex(
+  rootPath: string,
+  onProgress?: (count: number) => void
+): Promise<FileItem[]> {
   const results: FileItem[] = []
   const BATCH = 50
 
@@ -366,6 +369,7 @@ async function buildSearchIndex(rootPath: string): Promise<FileItem[]> {
           })
         )
         results.push(...batchResults.filter((r): r is FileItem => r !== null))
+        onProgress?.(results.length)
       }
 
       // Walk subdirectories sequentially to avoid overwhelming FS
@@ -769,13 +773,48 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('get-folder-children', async (_event, dirPath: string) => {
-    if (!isPathUnderRoot(dirPath)) return []
-    return getFolderChildren(dirPath)
+    if (!dirPath || String(dirPath).trim() === '') {
+      return { ok: false as const, error: 'No folder path set.' }
+    }
+    const normalizedPath = normalize(resolve(dirPath))
+    if (!isPathUnderRoot(normalizedPath)) {
+      return { ok: false as const, error: 'Path not allowed. The folder may be outside your library.' }
+    }
+    try {
+      const children = await getFolderChildren(normalizedPath)
+      return { ok: true as const, children }
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : ''
+      let message = err instanceof Error ? err.message : 'Failed to read folder'
+      if (code === 'ENOENT') message = 'This folder does not exist.'
+      else if (code === 'EACCES') message = 'Access denied to this folder.'
+      return { ok: false as const, error: message }
+    }
   })
 
   ipcMain.handle('build-search-index', async (_event, rootPath: string) => {
-    if (!isPathUnderRoot(rootPath)) return []
-    return buildSearchIndex(rootPath)
+    if (!rootPath || String(rootPath).trim() === '') {
+      return { ok: false as const, error: 'No folder path set.' }
+    }
+    const normalizedPath = normalize(resolve(rootPath))
+    if (!isPathUnderRoot(normalizedPath)) {
+      return { ok: false as const, error: 'Path not allowed. The folder may be outside your library.' }
+    }
+    try {
+      await access(normalizedPath).catch(() => {
+        throw new Error('This folder does not exist or is not accessible.')
+      })
+      const files = await buildSearchIndex(normalizedPath, (count) => {
+        mainWindow?.webContents.send('search-index-progress', count)
+      })
+      return { ok: true as const, files }
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : ''
+      let message = err instanceof Error ? err.message : 'Failed to build search index'
+      if (code === 'ENOENT') message = 'This folder does not exist. Open Settings to choose a valid folder.'
+      else if (code === 'EACCES') message = 'Access denied to this folder.'
+      return { ok: false as const, error: message }
+    }
   })
 
   ipcMain.handle('find-duplicates', async (_event, rootPath: string) => {

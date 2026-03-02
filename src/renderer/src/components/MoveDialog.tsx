@@ -37,8 +37,8 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
   // Load initial tree
   useEffect(() => {
     async function load() {
-      const children = await window.api.getFolderChildren(sectionRoot)
-      setTree(children)
+      const result = await window.api.getFolderChildren(sectionRoot) as { ok: boolean; children?: FolderNode[] }
+      setTree(result.ok && result.children ? result.children : [])
     }
     load()
   }, [sectionRoot])
@@ -95,8 +95,8 @@ export default function MoveDialog({ mode }: MoveDialogProps) {
       await window.api.createFolder(parent, name)
       const newPath = pathJoin(normPath(parent), name)
       addNotification('success', `Created "${name}"`)
-      const children = await window.api.getFolderChildren(sectionRoot)
-      setTree(children)
+      const result = await window.api.getFolderChildren(sectionRoot) as { ok: boolean; children?: FolderNode[] }
+      if (result.ok && result.children) setTree(result.children)
       setSelectedFolder(newPath)
       setNewFolderName('')
       setShowNewFolder(false)
@@ -246,8 +246,8 @@ function MoveTreeNode({ node, depth, selectedFolder, onSelect }: MoveTreeNodePro
 
   const handleExpand = async () => {
     if (!isExpanded && children === null) {
-      const loaded = await window.api.getFolderChildren(node.path)
-      setChildren(loaded)
+      const result = await window.api.getFolderChildren(node.path) as { ok: boolean; children?: FolderNode[] }
+      setChildren(result.ok && result.children ? result.children : [])
     }
     setIsExpanded(!isExpanded)
   }

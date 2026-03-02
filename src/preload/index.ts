@@ -22,6 +22,11 @@ const api = {
     ipcRenderer.invoke('get-folder-children', dirPath),
   buildSearchIndex: (rootPath: string) =>
     ipcRenderer.invoke('build-search-index', rootPath),
+  subscribeSearchIndexProgress: (callback: (count: number) => void) => {
+    const handler = (_: unknown, count: number) => callback(count)
+    ipcRenderer.on('search-index-progress', handler)
+    return () => ipcRenderer.removeListener('search-index-progress', handler)
+  },
   findDuplicates: (rootPath: string) =>
     ipcRenderer.invoke('find-duplicates', rootPath),
   moveFiles: (sources: string[], destination: string) =>
