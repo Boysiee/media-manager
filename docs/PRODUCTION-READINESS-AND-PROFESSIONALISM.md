@@ -11,7 +11,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 ### Store & Data Flow
 
 - ✓ **Search query**: `setSearchQuery` updates on every keystroke. _(Done: 200ms debounce in TitleBar.)_ Filtering runs in renderer over `searchIndex`. For large indexes (10k+ files), debounce search input by 150–300 ms and/or move filtering to a Web Worker so the main thread stays responsive.
-- **Sort**: Re-sorting on every `setSortField` / `toggleSortOrder` is fine for typical list sizes. If you ever support 10k+ items in a single folder, consider memoizing sorted list (e.g. `useMemo` in the component that consumes it) so you don’t re-sort on unrelated store updates.
+- ✓ **Sort**: Store keeps a single sorted list; sort runs only on load and on `setSortField`/`toggleSortOrder`, not on unrelated store updates. FileGrid uses `useMemo` for `displayFiles`. _(Done.)_
 
 ### Async & Main Process
 
@@ -27,7 +27,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 
 ### Virtual List
 
-- **FileGrid**: You use `@tanstack/react-virtual`; that’s good. Ensure `getScrollElement` is stable (ref to the scroll container). Overscan of 5 is reasonable; for very large lists you can tune.
+- ✓ **FileGrid**: Uses `@tanstack/react-virtual` with `getScrollElement: () => parentRef.current` (stable ref). Overscan 5. _(Done.)_
 
 ---
 
@@ -80,7 +80,7 @@ A focused review on **speed**, **logic**, **responsiveness**, **professionalism*
 ### Accessibility & Input
 
 - ✓ **Focus management**: After opening Move dialog, focus the first focusable element (e.g. first folder or “Cancel”). After closing context menu, restore focus to the item that had it. When renaming, focus is set—good.
-- **Keyboard**: You cover main shortcuts. Ensure Tab order is logical (sidebar → toolbar → grid → preview). Escape closes things—good.
+- ✓ **Keyboard**: Main shortcuts covered; Tab order follows DOM (sidebar → toolbar → grid → preview). Escape closes dialogs/context menu. _(Done.)_
 - ✓ **Screen readers**: Add `aria-label` on icon-only buttons (back, forward, sort, grid/list, refresh, etc.) and `role="list"` / `role="listitem"` where appropriate so the app is navigable by screen reader. _(Done: aria-labels on Toolbar.)_
 
 ---
@@ -155,4 +155,4 @@ Implementing the high-priority items will make the app faster, correct under rap
 
 ---
 
-_Document created from codebase review. Rows/items marked ✓ were implemented in a prior session. Last updated: March 2025 (main process error returns; search index progress; removable drive handling)._
+_Document created from codebase review. Rows/items marked ✓ were implemented in a prior session. Last updated: March 2025 (sort/virtual list/keys; main process error returns; search index progress; removable drive)._

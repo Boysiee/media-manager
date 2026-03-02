@@ -939,6 +939,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     schedulePersistUiState(get)
   },
 
+  // Sort runs only here and when loading files; store holds sorted list so no re-sort on unrelated updates (good for 10k+).
   setSortField: (field) => {
     const { files, sortOrder, mediaDurations } = get()
     set({
